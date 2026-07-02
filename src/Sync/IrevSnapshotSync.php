@@ -14,7 +14,6 @@ use Psr\Log\LoggerInterface;
  * Applies IREV snapshot document into Redis order pool.
  *
  * - Filters CPL only (payment_model == 'cpl')
- * - Resolves default preset id by country ISO2 via user-provided resolver
  * - Upserts virtual orders `irev:{partner_uuid}` into `preset:{id}:orders_pool`
  * - Stores remaining in dedicated key `irev:{uuid}:remaining`
  */
@@ -26,23 +25,15 @@ final readonly class IrevSnapshotSync
         private ?LoggerInterface $logger = null,
     ) {}
 
-    /**
-     * @param callable(string): (int|null) $resolvePresetId country ISO2 -> default preset_id
-     */
-    public function apply(SnapshotDocument $document, callable $resolvePresetId): void
+    public function apply(SnapshotDocument $document): void
     {
-        if ($document->countries === []) {
-            $this->logger?->warning('IREV snapshot: empty countries');
+        if ($document->presets === []) {
+            $this->logger?->warning('IREV snapshot: empty presets');
             return;
         }
 
-        foreach ($document->countries as $country) {
-            $presetId = $resolvePresetId($country->code);
-            if (!$presetId) {
-                $this->logger?->warning('No default preset for country', ['country' => $country->code]);
-                continue;
-            }
-            $this->applyCountry((int) $presetId, $country->code, $country->orders);
+        foreach ($document->presets as $preset) {
+            $this->applyPreset($preset->presetId, $preset->orders);
         }
     }
 
@@ -103,7 +94,7 @@ final readonly class IrevSnapshotSync
     /**
      * @param list<IrevOrderSlot> $slots
      */
-    private function applyCountry(int $presetId, string $countryIso2, array $slots): void
+    private function applyPreset(int $presetId, array $slots): void
     {
         $poolKey = $this->keys->presetOrderPoolKey($presetId);
 
@@ -136,7 +127,6 @@ final readonly class IrevSnapshotSync
             $dataKey = $this->keys->orderDataKey($orderId);
             $this->redis->hMSet($dataKey, [
                 'source' => 'irev',
-                'country' => $countryIso2,
                 'partner_uuid' => $partnerUuid,
                 'partner_name' => $partnerName,
                 'payment_model' => 'cpl',

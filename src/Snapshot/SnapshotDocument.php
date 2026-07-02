@@ -12,10 +12,10 @@ namespace Enthusiast\OrderPool\Snapshot;
 final readonly class SnapshotDocument
 {
     /**
-     * @param list<CountrySnapshot> $countries
+     * @param list<PresetSnapshot> $presets
      */
     public function __construct(
-        public array $countries,
+        public array $presets,
     ) {}
 }
 

@@ -5,15 +5,15 @@ declare(strict_types=1);
 namespace Enthusiast\OrderPool\Snapshot;
 
 /**
- * One country in the capacity snapshot.
+ * One preset (LM) in the capacity snapshot.
  */
-final readonly class CountrySnapshot
+final readonly class PresetSnapshot
 {
     /**
      * @param list<IrevOrderSlot> $orders
      */
     public function __construct(
-        public string $code,
+        public int $presetId,
         public array $orders,
     ) {}
 }
