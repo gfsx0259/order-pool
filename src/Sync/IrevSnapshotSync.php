@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enthusiast\OrderPool\Sync;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\OrderPool\Snapshot\SnapshotDocument;
 use Enthusiast\OrderPool\Snapshot\IrevOrderSlot;
@@ -38,13 +40,12 @@ final readonly class IrevSnapshotSync
     }
 
     /**
-     * Converts iRev snapshot schedule+tz (local) into LM-compatible weekly `availability_utc`.
+     * Converts iRev snapshot schedule+tz (local, today) into LM-compatible `availability_utc`.
      *
-     * Output format: "D:START-END,D:START-END,..." where D = 1..7 (ISO-8601, Mon..Sun),
-     * START/END = minutes-of-day in UTC.
+     * Output format: "D:START-END" (or two segments for night-wrap) where D = today's
+     * ISO-8601 day (1..7, Mon..Sun in UTC), START/END = minutes-of-day in UTC.
      *
-     * For night-wrap windows (e.g. 22:00-06:00) produces two segments per day:
-     * - D:START-1440 and nextDay:0-END
+     * Refreshed on every snapshot sync (~15 min); not replicated across the whole week.
      */
     private function buildAvailabilityUtc(string $schedule, string $scheduleTz): string
     {
@@ -65,7 +66,6 @@ final readonly class IrevSnapshotSync
             $offsetMin = $sign * (((int) $tzm[2]) * 60 + (int) $tzm[3]);
         }
 
-        // Convert local minutes -> UTC minutes (same each day)
         $startUtc = ($startLocal - $offsetMin) % 1440;
         if ($startUtc < 0) {
             $startUtc += 1440;
@@ -75,20 +75,16 @@ final readonly class IrevSnapshotSync
             $endUtc += 1440;
         }
 
-        $segments = [];
-        // 1..7 (Mon..Sun)
-        for ($d = 1; $d <= 7; $d++) {
-            if ($startUtc <= $endUtc) {
-                // normal
-                $segments[] = sprintf('%d:%d-%d', $d, $startUtc, $endUtc);
-            } else {
-                // wrap
-                $segments[] = sprintf('%d:%d-%d', $d, $startUtc, 1440);
-                $next = $d === 7 ? 1 : $d + 1;
-                $segments[] = sprintf('%d:%d-%d', $next, 0, $endUtc);
-            }
+        $today = (int) (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('N');
+
+        if ($startUtc <= $endUtc) {
+            return sprintf('%d:%d-%d', $today, $startUtc, $endUtc);
         }
-        return implode(',', $segments);
+
+        // Night-wrap: evening today + early morning next UTC day (same local shift).
+        $next = $today === 7 ? 1 : $today + 1;
+
+        return sprintf('%d:%d-%d,%d:%d-%d', $today, $startUtc, 1440, $next, 0, $endUtc);
     }
 
     /**
