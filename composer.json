@@ -7,7 +7,9 @@
     "ext-pcntl": "*",
     "ext-redis": "*",
     "yiisoft/yii-console": "^2.4",
-    "psr/log": "^2.0 || ^3.0"
+    "psr/log": "^2.0 || ^3.0",
+    "enthusiast/worker-template": "^1.2",
+    "cycle/database": "^2.1"
   },
   "autoload": {
     "psr-4": {
