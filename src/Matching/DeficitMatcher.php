@@ -62,7 +62,7 @@ final class DeficitMatcher
 
         $alpha = $this->rateExponent;
 
-        return $this->redis->eval(
+        $result = $this->redis->eval(
             self::script(),
             [
                 ...$keys,
@@ -78,6 +78,18 @@ final class DeficitMatcher
             ],
             $numKeys,
         );
+
+        if ($result === false) {
+            $error = $this->redis->getLastError();
+            if ($error !== null && $error !== '') {
+                $this->redis->clearLastError();
+                throw new \RuntimeException("Redis eval failed: {$error}");
+            }
+
+            return null;
+        }
+
+        return $result;
     }
 
     private static function script(): string
