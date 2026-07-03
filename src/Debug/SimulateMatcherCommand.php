@@ -27,6 +27,7 @@ final class SimulateMatcherCommand extends Command
 
     public function __construct(
         private readonly RedisClientInterface $redis,
+        private readonly LocalDay $localDay,
     ) {
         parent::__construct();
     }
@@ -167,7 +168,7 @@ final class SimulateMatcherCommand extends Command
             'daily_tz_offset' => (string) $order->dailyTzOffset,
         ]);
 
-        $localDay = LocalDay::resolve($order->dailyTzOffset);
+        $localDay = $this->localDay->resolve($order->dailyTzOffset);
         $this->redis->del($keys->orderSoldDryKey($order->id, $localDay));
         $this->redis->del($keys->orderSoldKey($order->id, $localDay));
     }
