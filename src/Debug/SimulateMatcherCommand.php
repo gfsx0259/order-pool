@@ -19,7 +19,7 @@ use Symfony\Component\Console\Output\OutputInterface;
  * Run WD-RR simulation from a JSON scenario and write an HTML report.
  *
  * Example:
- *   php yii order-pool:simulate scenarios/irev-200-vs-300.json
+ *   php yii order-pool:simulate irev-200-vs-300.json
  */
 final class SimulateMatcherCommand extends Command
 {
@@ -35,7 +35,7 @@ final class SimulateMatcherCommand extends Command
     {
         $this
             ->setDescription('Simulate WD-RR matching from a JSON scenario file')
-            ->addArgument('scenario', InputArgument::REQUIRED, 'Path to scenario JSON');
+            ->addArgument('scenario', InputArgument::REQUIRED, 'Scenario JSON file name or path (built-in: irev-200-vs-300.json)');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int

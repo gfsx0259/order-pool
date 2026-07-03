@@ -21,6 +21,7 @@ final readonly class SimulateScenario
 
     public static function fromJsonFile(string $path): self
     {
+        $path = self::resolveScenarioPath($path);
         $raw = file_get_contents($path);
         if ($raw === false) {
             throw new \InvalidArgumentException("Cannot read scenario file: {$path}");
@@ -66,13 +67,36 @@ final readonly class SimulateScenario
         );
     }
 
-    private static function resolveOutputPath(string $output, string $scenarioDir): string
+    private static function resolveScenarioPath(string $path): string
     {
-        if ($output === '' || str_starts_with($output, '/')) {
-            return $output !== '' ? $output : 'simulate-report.html';
+        if (is_file($path)) {
+            return $path;
         }
 
-        return $scenarioDir . '/' . $output;
+        $name = basename(str_replace('\\', '/', $path));
+        $packagePath = __DIR__ . '/scenarios/' . $name;
+        if (is_file($packagePath)) {
+            return $packagePath;
+        }
+
+        throw new \InvalidArgumentException(
+            "Scenario file not found: {$path} (also tried {$packagePath})",
+        );
+    }
+
+    private static function resolveOutputPath(string $output, string $scenarioDir): string
+    {
+        if ($output === '') {
+            $output = 'simulate-report.html';
+        }
+
+        if (str_starts_with($output, '/')) {
+            return $output;
+        }
+
+        $base = getcwd() ?: $scenarioDir;
+
+        return $base . '/' . $output;
     }
 }
 
