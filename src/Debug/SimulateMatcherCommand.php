@@ -8,6 +8,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Enthusiast\OrderPool\Matching\DeficitMatcher;
 use Enthusiast\OrderPool\Redis\KeySchema;
+use Enthusiast\OrderPool\Schedule\LocalDay;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -15,9 +16,10 @@ use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
- * Debug helper: create demo orders in Redis and run N match iterations.
+ * Run WD-RR simulation from a JSON scenario and write an HTML report.
  *
- * Writes only into a separate Redis namespace prefix (default "dbg:").
+ * Example:
+ *   php yii order-pool:simulate scenarios/irev-200-vs-300.json
  */
 final class SimulateMatcherCommand extends Command
 {
@@ -32,104 +34,335 @@ final class SimulateMatcherCommand extends Command
     protected function configure(): void
     {
         $this
-            ->addArgument('preset_id', InputArgument::REQUIRED, 'Preset id')
-            ->addArgument('iterations', InputArgument::OPTIONAL, 'How many match iterations', 50)
-            ->addArgument('prefix', InputArgument::OPTIONAL, 'Redis prefix namespace', 'dbg:');
+            ->setDescription('Simulate WD-RR matching from a JSON scenario file')
+            ->addArgument('scenario', InputArgument::REQUIRED, 'Path to scenario JSON');
     }
 
     protected function execute(InputInterface $input, OutputInterface $output): int
     {
-        $presetId = (int) $input->getArgument('preset_id');
-        $iterations = (int) $input->getArgument('iterations');
-        $prefix = (string) $input->getArgument('prefix');
+        $scenarioPath = (string) $input->getArgument('scenario');
+        $scenario = SimulateScenario::fromJsonFile($scenarioPath);
 
-        $keys = new KeySchema($prefix);
-        $poolKey = $keys->presetOrderPoolKey($presetId);
+        if ($scenario->presetId <= 0) {
+            throw new \InvalidArgumentException('scenario preset_id must be > 0');
+        }
+        if ($scenario->leads <= 0) {
+            throw new \InvalidArgumentException('scenario leads must be > 0');
+        }
 
-        $this->redis->del($poolKey);
+        $keys = new KeySchema($scenario->prefix);
+        $this->resetPool($keys, $scenario);
 
-        $lm1 = '1001';
-        $lm2 = '1002';
-        $this->seedLmOrder($keys, $lm1, partnerId: 'p1', rate: 200, capacity: 20);
-        $this->seedLmOrder($keys, $lm2, partnerId: 'p2', rate: 180, capacity: 20);
+        $matcher = new DeficitMatcher($this->redis, $keys, rateExponent: $scenario->rateExponent);
+        $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $utcTs = (int) $now->format('U');
 
-        $irevA = 'irev:11111111-1111-1111-1111-111111111111';
-        $irevB = 'irev:22222222-2222-2222-2222-222222222222';
-        $this->seedIrevOrder($keys, $irevA, rate: 170, capacity: 30, schedule: '10:00-19:00', tz: '+0300');
-        $this->seedIrevOrder($keys, $irevB, rate: 160, capacity: 30, schedule: '10:00-19:00', tz: '+0300');
-
-        $this->redis->rawCommand('SADD', $poolKey, $lm1, $lm2, $irevA, $irevB);
-
-        $matcher = new DeficitMatcher($this->redis, $keys, rateExponent: 1.0);
-        $counts = [];
-
-        for ($i = 0; $i < $iterations; $i++) {
-            $res = $matcher->match($presetId, new DateTimeImmutable('now', new DateTimeZone('UTC')));
-            if ($res === null) {
-                $counts['(nil)'] = ($counts['(nil)'] ?? 0) + 1;
-                continue;
-            }
-            if (is_string($res)) {
-                $counts[$res] = ($counts[$res] ?? 0) + 1;
-                continue;
-            }
-            $kind = $res[0] ?? '?';
-            if ($kind === 'lm') {
-                $counts['lm:' . ($res[1] ?? '')] = ($counts['lm:' . ($res[1] ?? '')] ?? 0) + 1;
-            } elseif ($kind === 'irev') {
-                $counts['irev:' . ($res[2] ?? '')] = ($counts['irev:' . ($res[2] ?? '')] ?? 0) + 1;
-            } else {
-                $counts['?'] = ($counts['?'] ?? 0) + 1;
+        /** @var array<string, string> $orderLabels */
+        $orderLabels = [];
+        foreach ($scenario->orders as $order) {
+            $orderLabels[$order->id] = $order->displayLabel();
+            if ($order->source === 'irev' && !str_starts_with($order->id, 'irev:')) {
+                throw new \InvalidArgumentException("IREV order id must start with irev:, got {$order->id}");
             }
         }
 
-        $output->writeln('Result distribution:');
-        foreach ($counts as $k => $v) {
-            $output->writeln(sprintf('- %s: %d', $k, $v));
+        $rows = [];
+        $winnerCounts = [];
+        $stockCount = 0;
+
+        for ($lead = 1; $lead <= $scenario->leads; $lead++) {
+            $result = $matcher->match(
+                $scenario->presetId,
+                $now,
+                dryRun: true,
+                debug: true,
+                debugLabel: (string) $lead,
+            );
+
+            $historyLine = $this->fetchLastHistoryLine($keys->presetMatchHistoryKey($scenario->presetId));
+            $sold = $this->fetchSoldSnapshot($keys, $scenario->orders, $utcTs);
+
+            if ($result === null) {
+                $winnerCounts['STOCK'] = ($winnerCounts['STOCK'] ?? 0) + 1;
+                $stockCount++;
+                $rows[] = [
+                    'lead' => $lead,
+                    'winner' => 'STOCK',
+                    'kind' => 'stock',
+                    'line' => $historyLine,
+                    'sold' => $sold,
+                ];
+                continue;
+            }
+
+            if (is_string($result)) {
+                throw new \RuntimeException("Unexpected match result: {$result}");
+            }
+
+            [$kind, $refId, $partnerId] = array_pad($result, 3, null);
+            $winnerKey = $this->resolveWinnerKey($kind, $refId, $partnerId, $scenario->orders);
+            $winnerLabel = $orderLabels[$winnerKey] ?? (string) $refId;
+            $winnerCounts[$winnerLabel] = ($winnerCounts[$winnerLabel] ?? 0) + 1;
+
+            $rows[] = [
+                'lead' => $lead,
+                'winner' => $winnerLabel,
+                'kind' => is_string($kind) ? $kind : 'unknown',
+                'line' => $historyLine,
+                'sold' => $sold,
+            ];
         }
 
-        $output->writeln(sprintf('Pool key: %s', $poolKey));
+        $matched = $scenario->leads - $stockCount;
+        $html = $this->buildHtml($scenario, $rows, $winnerCounts, $matched, $stockCount);
+        $dir = dirname($scenario->output);
+        if ($dir !== '' && $dir !== '.' && !is_dir($dir)) {
+            mkdir($dir, 0775, true);
+        }
+        file_put_contents($scenario->output, $html);
+
+        $output->writeln(sprintf('Scenario: %s', $scenario->name));
+        $output->writeln(sprintf('Leads: %d (matched: %d, stock: %d)', $scenario->leads, $matched, $stockCount));
+        $output->writeln('Distribution:');
+        foreach ($winnerCounts as $label => $count) {
+            $pct = round(100 * $count / $scenario->leads, 1);
+            $output->writeln(sprintf('  %s: %d (%.1f%%)', $label, $count, $pct));
+        }
+        $output->writeln(sprintf('Report: %s', $scenario->output));
 
         return Command::SUCCESS;
     }
 
-    private function seedLmOrder(KeySchema $keys, string $orderId, string $partnerId, int $rate, int $capacity): void
+    private function resetPool(KeySchema $keys, SimulateScenario $scenario): void
     {
-        $this->redis->hMSet($keys->orderDataKey($orderId), [
-            'source' => 'lm',
-            'partner_id' => $partnerId,
-            'rate' => (string) $rate,
-            'availability_utc' => '',
-            'capacity' => (string) $capacity,
-            'daily_tz_offset' => '0',
-        ]);
+        $poolKey = $keys->presetOrderPoolKey($scenario->presetId);
+        $orderIds = [];
+
+        foreach ($scenario->orders as $order) {
+            $orderIds[] = $order->id;
+            $this->seedOrder($keys, $order);
+        }
+
+        $this->redis->del($poolKey);
+        $this->redis->del($keys->presetMatchHistoryKey($scenario->presetId));
+
+        if ($orderIds !== []) {
+            $this->redis->rawCommand('SADD', $poolKey, ...$orderIds);
+        }
     }
 
-    private function seedIrevOrder(KeySchema $keys, string $orderId, int $rate, int $capacity, string $schedule, string $tz): void
+    private function seedOrder(KeySchema $keys, SimulateOrder $order): void
     {
-        $uuid = substr($orderId, 5);
-        $availability = '';
-        if ($schedule !== '' && preg_match('/^(\\d{2}):(\\d{2})-(\\d{2}):(\\d{2})$/', $schedule, $m)) {
-            $start = ((int) $m[1]) * 60 + (int) $m[2];
-            $end = ((int) $m[3]) * 60 + (int) $m[4];
-            $today = (int) (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('N');
-            $availability = sprintf('%d:%d-%d', $today, $start, $end);
-        }
-        $offset = 0;
-        if ($tz !== '' && preg_match('/^([+-])(\d{2})(\d{2})$/', $tz, $tzm)) {
-            $sign = $tzm[1] === '-' ? -1 : 1;
-            $offset = $sign * (((int) $tzm[2]) * 3600 + (int) $tzm[3] * 60);
-        }
-        $this->redis->hMSet($keys->orderDataKey($orderId), [
-            'source' => 'irev',
-            'partner_id' => $uuid,
-            'partner_name' => 'DBG',
-            'rate' => (string) $rate,
+        $availability = $this->buildAvailabilityUtc($order->schedule);
+
+        $this->redis->hMSet($keys->orderDataKey($order->id), [
+            'source' => $order->source,
+            'partner_id' => $order->partnerId,
+            'partner_name' => $order->partnerName,
+            'rate' => (string) $order->rate,
             'availability_utc' => $availability,
-            'capacity' => (string) $capacity,
-            'schedule' => $schedule,
-            'schedule_tz' => $tz,
-            'daily_tz_offset' => (string) $offset,
+            'capacity' => (string) $order->capacity,
+            'schedule' => $order->schedule,
+            'schedule_tz' => $order->scheduleTz,
+            'daily_tz_offset' => (string) $order->dailyTzOffset,
         ]);
+
+        $localDay = LocalDay::resolve($order->dailyTzOffset);
+        $this->redis->del($keys->orderSoldDryKey($order->id, $localDay));
+        $this->redis->del($keys->orderSoldKey($order->id, $localDay));
+    }
+
+    private function buildAvailabilityUtc(string $schedule): string
+    {
+        if ($schedule === '' || !preg_match('/^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/', $schedule, $m)) {
+            return '';
+        }
+
+        $start = ((int) $m[1]) * 60 + (int) $m[2];
+        $end = ((int) $m[3]) * 60 + (int) $m[4];
+        $today = (int) (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('N');
+
+        return sprintf('%d:%d-%d', $today, $start, $end);
+    }
+
+    /**
+     * @param list<SimulateOrder> $orders
+     *
+     * @return array<string, int>
+     */
+    private function fetchSoldSnapshot(KeySchema $keys, array $orders, int $utcTs): array
+    {
+        $sold = [];
+        foreach ($orders as $order) {
+            $localDay = intdiv($utcTs + $order->dailyTzOffset, 86400);
+            $value = $this->redis->rawCommand('GET', $keys->orderSoldDryKey($order->id, $localDay));
+            $sold[$order->displayLabel()] = is_string($value) || is_int($value) ? (int) $value : 0;
+        }
+
+        return $sold;
+    }
+
+    private function fetchLastHistoryLine(string $historyKey): string
+    {
+        $res = $this->redis->rawCommand('LINDEX', $historyKey, -1);
+
+        return is_string($res) ? $res : '';
+    }
+
+    /**
+     * @param list<SimulateOrder> $orders
+     */
+    private function resolveWinnerKey(mixed $kind, mixed $refId, mixed $partnerId, array $orders): string
+    {
+        if ($kind === 'lm') {
+            return (string) $refId;
+        }
+
+        foreach ($orders as $order) {
+            if ($order->partnerId === $partnerId) {
+                return $order->id;
+            }
+        }
+
+        return 'irev:' . $partnerId;
+    }
+
+    /**
+     * @param list<array{lead: int, winner: string, kind: string, line: string, sold: array<string, int>}> $rows
+     * @param array<string, int> $winnerCounts
+     */
+    private function buildHtml(
+        SimulateScenario $scenario,
+        array $rows,
+        array $winnerCounts,
+        int $matched,
+        int $stockCount,
+    ): string {
+        $soldLabels = array_map(static fn (SimulateOrder $o) => $o->displayLabel(), $scenario->orders);
+
+        $summaryRows = '';
+        foreach ($winnerCounts as $label => $count) {
+            $pctTotal = round(100 * $count / $scenario->leads, 1);
+            $pctMatched = $matched > 0 && $label !== 'STOCK'
+                ? round(100 * $count / $matched, 1)
+                : null;
+            $matchedCol = $pctMatched !== null ? sprintf('%.1f%% of matched', $pctMatched) : '—';
+            $summaryRows .= sprintf(
+                '<tr><td>%s</td><td>%d</td><td>%.1f%% of all</td><td>%s</td></tr>',
+                htmlspecialchars($label, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                $count,
+                $pctTotal,
+                $matchedCol,
+            );
+        }
+
+        $detailHeader = '<th>#</th><th>Winner</th><th>Match line</th>';
+        foreach ($soldLabels as $label) {
+            $detailHeader .= '<th>' . htmlspecialchars($label . ' sold', ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</th>';
+        }
+
+        $detailRows = '';
+        foreach ($rows as $row) {
+            $class = match ($row['kind']) {
+                'stock' => 'stock',
+                'irev' => 'irev',
+                'lm' => 'lm',
+                default => '',
+            };
+            $detailRows .= sprintf('<tr class="%s">', $class);
+            $detailRows .= '<td>' . $row['lead'] . '</td>';
+            $detailRows .= '<td><strong>' . htmlspecialchars($row['winner'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</strong></td>';
+            $detailRows .= '<td>' . htmlspecialchars($row['line'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . '</td>';
+            foreach ($soldLabels as $label) {
+                $detailRows .= '<td>' . ($row['sold'][$label] ?? 0) . '</td>';
+            }
+            $detailRows .= '</tr>';
+        }
+
+        $ordersDesc = '';
+        foreach ($scenario->orders as $order) {
+            $ordersDesc .= sprintf(
+                '<li>%s — %s, %d$, cap %d</li>',
+                htmlspecialchars($order->displayLabel(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'),
+                strtoupper($order->source),
+                $order->rate,
+                $order->capacity,
+            );
+        }
+
+        $expected = $this->buildExpectedNote($scenario);
+
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WD-RR: {$this->e($scenario->name)}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; color: #222; }
+    h1 { font-size: 1.4rem; }
+    table { border-collapse: collapse; margin: 16px 0; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 6px 10px; font-size: 13px; vertical-align: top; }
+    th { background: #f5f5f5; text-align: left; }
+    tr.stock td { background: #fff8e1; }
+    tr.irev td { background: #f1f8e9; }
+    tr.lm td { background: #e3f2fd; }
+    .meta { color: #555; margin-bottom: 20px; }
+    .mono { font-family: ui-monospace, monospace; font-size: 12px; }
+    .note { background: #f9f9f9; border-left: 4px solid #90caf9; padding: 10px 14px; margin: 16px 0; }
+  </style>
+</head>
+<body>
+  <h1>WD-RR simulation: {$this->e($scenario->name)}</h1>
+  <div class="meta">
+    <div>Preset ID: {$scenario->presetId} · Leads: {$scenario->leads} · Matched: {$matched} · Stock: {$stockCount}</div>
+    <div>Prefix: <span class="mono">{$this->e($scenario->prefix)}</span> · α = {$scenario->rateExponent}</div>
+    <ul>{$ordersDesc}</ul>
+  </div>
+  {$expected}
+  <h2>Summary</h2>
+  <table>
+    <thead><tr><th>Winner</th><th>Count</th><th>% of all leads</th><th>% of matched</th></tr></thead>
+    <tbody>{$summaryRows}</tbody>
+  </table>
+  <h2>Lead-by-lead</h2>
+  <table>
+    <thead><tr>{$detailHeader}</tr></thead>
+    <tbody>{$detailRows}</tbody>
+  </table>
+</body>
+</html>
+HTML;
+    }
+
+    private function buildExpectedNote(SimulateScenario $scenario): string
+    {
+        $totalCap = 0;
+        $sumW = 0.0;
+        foreach ($scenario->orders as $order) {
+            $totalCap += $order->capacity;
+            $sumW += $order->capacity * ($order->rate ** $scenario->rateExponent);
+        }
+        if ($sumW <= 0) {
+            return '';
+        }
+
+        $parts = [];
+        foreach ($scenario->orders as $order) {
+            $w = $order->capacity * ($order->rate ** $scenario->rateExponent);
+            $pct = round(100 * $w / $sumW, 1);
+            $expected = $totalCap > 0 ? (int) round($totalCap * $w / $sumW) : 0;
+            $parts[] = sprintf('%s ~%d%% (~%d of %d cap)', $order->displayLabel(), (int) $pct, $expected, $totalCap);
+        }
+
+        return '<div class="note"><strong>Expected</strong> (equal remaining cap): '
+            . implode('; ', $parts)
+            . sprintf('. Stock after ~%d leads if only these orders.', $totalCap)
+            . '</div>';
+    }
+
+    private function e(string $value): string
+    {
+        return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 }
