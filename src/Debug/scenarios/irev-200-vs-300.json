@@ -2,7 +2,7 @@
   "name": "IREV 200$ vs 300$ (cap 20 each)",
   "preset_id": 1,
   "leads": 100,
-  "rate_exponent": 1.0,
+  "rate_exponent": 1.05,
   "prefix": "dbg:",
   "output": "irev-200-vs-300-report.html",
   "orders": [
