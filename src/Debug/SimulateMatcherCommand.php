@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enthusiast\OrderPool\Debug;
 
+use DateTimeImmutable;
+use DateTimeZone;
 use Enthusiast\OrderPool\Matching\DeficitMatcher;
 use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
@@ -44,29 +46,25 @@ final class SimulateMatcherCommand extends Command
         $keys = new KeySchema($prefix);
         $poolKey = $keys->presetOrderPoolKey($presetId);
 
-        // reset pool
         $this->redis->del($poolKey);
 
-        // LM orders (numeric ids, existing schema)
         $lm1 = '1001';
         $lm2 = '1002';
-        $this->seedLmOrder($keys, $lm1, partnerId: 'p1', price: 200, dailyLimit: 20);
-        $this->seedLmOrder($keys, $lm2, partnerId: 'p2', price: 180, dailyLimit: 20);
+        $this->seedLmOrder($keys, $lm1, partnerId: 'p1', rate: 200, capacity: 20);
+        $this->seedLmOrder($keys, $lm2, partnerId: 'p2', rate: 180, capacity: 20);
 
-        // IREV virtual orders
         $irevA = 'irev:11111111-1111-1111-1111-111111111111';
         $irevB = 'irev:22222222-2222-2222-2222-222222222222';
-        $this->seedIrevOrder($keys, $irevA, rate: 170, remaining: 30, schedule: '10:00-19:00', tz: '+0300');
-        $this->seedIrevOrder($keys, $irevB, rate: 160, remaining: 30, schedule: '10:00-19:00', tz: '+0300');
+        $this->seedIrevOrder($keys, $irevA, rate: 170, capacity: 30, schedule: '10:00-19:00', tz: '+0300');
+        $this->seedIrevOrder($keys, $irevB, rate: 160, capacity: 30, schedule: '10:00-19:00', tz: '+0300');
 
-        // add to pool
         $this->redis->rawCommand('SADD', $poolKey, $lm1, $lm2, $irevA, $irevB);
 
         $matcher = new DeficitMatcher($this->redis, $keys, rateExponent: 1.0);
         $counts = [];
 
         for ($i = 0; $i < $iterations; $i++) {
-            $res = $matcher->match($presetId, new \DateTimeImmutable('now', new \DateTimeZone('UTC')));
+            $res = $matcher->match($presetId, new DateTimeImmutable('now', new DateTimeZone('UTC')));
             if ($res === null) {
                 $counts['(nil)'] = ($counts['(nil)'] ?? 0) + 1;
                 continue;
@@ -79,7 +77,7 @@ final class SimulateMatcherCommand extends Command
             if ($kind === 'lm') {
                 $counts['lm:' . ($res[1] ?? '')] = ($counts['lm:' . ($res[1] ?? '')] ?? 0) + 1;
             } elseif ($kind === 'irev') {
-                $counts['irev:' . ($res[1] ?? '')] = ($counts['irev:' . ($res[1] ?? '')] ?? 0) + 1;
+                $counts['irev:' . ($res[2] ?? '')] = ($counts['irev:' . ($res[2] ?? '')] ?? 0) + 1;
             } else {
                 $counts['?'] = ($counts['?'] ?? 0) + 1;
             }
@@ -91,49 +89,47 @@ final class SimulateMatcherCommand extends Command
         }
 
         $output->writeln(sprintf('Pool key: %s', $poolKey));
+
         return Command::SUCCESS;
     }
 
-    private function seedLmOrder(KeySchema $keys, string $orderId, string $partnerId, int $price, int $dailyLimit): void
+    private function seedLmOrder(KeySchema $keys, string $orderId, string $partnerId, int $rate, int $capacity): void
     {
         $this->redis->hMSet($keys->orderDataKey($orderId), [
+            'source' => 'lm',
             'partner_id' => $partnerId,
-            'final_price' => (string) $price,
+            'rate' => (string) $rate,
             'availability_utc' => '',
-            'daily_limit' => (string) $dailyLimit,
+            'capacity' => (string) $capacity,
             'daily_tz_offset' => '0',
         ]);
     }
 
-    private function seedIrevOrder(KeySchema $keys, string $orderId, int $rate, int $remaining, string $schedule, string $tz): void
+    private function seedIrevOrder(KeySchema $keys, string $orderId, int $rate, int $capacity, string $schedule, string $tz): void
     {
         $uuid = substr($orderId, 5);
-        // Simplified: store a weekly availability_utc directly (Mon..Sun 10:00-19:00 UTC here).
-        // In real sync this is computed from schedule+tz in PHP.
         $availability = '';
-        if ($schedule !== '') {
-            if (preg_match('/^(\\d{2}):(\\d{2})-(\\d{2}):(\\d{2})$/', $schedule, $m)) {
-                $start = ((int)$m[1]) * 60 + (int)$m[2];
-                $end = ((int)$m[3]) * 60 + (int)$m[4];
-                // treat schedule as already UTC in this debug helper
-                $segs = [];
-                for ($d = 1; $d <= 7; $d++) {
-                    $segs[] = sprintf('%d:%d-%d', $d, $start, $end);
-                }
-                $availability = implode(',', $segs);
-            }
+        if ($schedule !== '' && preg_match('/^(\\d{2}):(\\d{2})-(\\d{2}):(\\d{2})$/', $schedule, $m)) {
+            $start = ((int) $m[1]) * 60 + (int) $m[2];
+            $end = ((int) $m[3]) * 60 + (int) $m[4];
+            $today = (int) (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('N');
+            $availability = sprintf('%d:%d-%d', $today, $start, $end);
+        }
+        $offset = 0;
+        if ($tz !== '' && preg_match('/^([+-])(\d{2})(\d{2})$/', $tz, $tzm)) {
+            $sign = $tzm[1] === '-' ? -1 : 1;
+            $offset = $sign * (((int) $tzm[2]) * 3600 + (int) $tzm[3] * 60);
         }
         $this->redis->hMSet($keys->orderDataKey($orderId), [
             'source' => 'irev',
-            'partner_uuid' => $uuid,
+            'partner_id' => $uuid,
             'partner_name' => 'DBG',
-            'payment_model' => 'cpl',
             'rate' => (string) $rate,
             'availability_utc' => $availability,
+            'capacity' => (string) $capacity,
             'schedule' => $schedule,
             'schedule_tz' => $tz,
+            'daily_tz_offset' => (string) $offset,
         ]);
-        $this->redis->set($keys->irevRemainingKey($uuid), (string) $remaining);
     }
 }
-

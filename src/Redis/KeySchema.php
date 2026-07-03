@@ -10,9 +10,19 @@ final readonly class KeySchema
         private string $prefix = '',
     ) {}
 
+    public function prefix(): string
+    {
+        return $this->prefix;
+    }
+
     public function presetOrderPoolKey(int $presetId): string
     {
         return $this->prefix . sprintf('preset:%d:orders_pool', $presetId);
+    }
+
+    public function presetRestoreLockKey(int $presetId): string
+    {
+        return $this->prefix . sprintf('preset:%d:restore_lock', $presetId);
     }
 
     public function orderDataKey(string $orderId): string
@@ -20,19 +30,11 @@ final readonly class KeySchema
         return $this->prefix . sprintf('order:%s:data', $orderId);
     }
 
-    public function orderDeliveredKey(string $orderId, int $localDay): string
+    /**
+     * How many leads LM routed to this order since last capacity refresh (LM: day-scoped, IREV: reset on snapshot).
+     */
+    public function orderSoldKey(string $orderId, int $localDay): string
     {
-        return $this->prefix . sprintf('order:%s:delivered:%d', $orderId, $localDay);
-    }
-
-    public function irevRemainingKey(string $partnerUuid): string
-    {
-        return $this->prefix . sprintf('irev:%s:remaining', $partnerUuid);
-    }
-
-    public function irevAssignedKey(string $partnerUuid, int $localDay): string
-    {
-        return $this->prefix . sprintf('irev:%s:lm_assigned:%d', $partnerUuid, $localDay);
+        return $this->prefix . sprintf('order:%s:sold:%d', $orderId, $localDay);
     }
 }
-

@@ -14,9 +14,9 @@ use Enthusiast\WorkerTemplate\RedisClientInterface;
  *
  * Competes LM real orders and IREV virtual orders in the same preset pool.
  *
- * Result kinds:
- * - ['lm', <orderId>, <partnerId>, <finalPrice>]
- * - ['irev', <partnerUuid>, <rate>]
+ * Result kinds (uniform 4-tuple):
+ * - ['lm'|'irev', <refId>, <partnerId>, <rate>]
+ *   refId = LM order id (numeric string) or IREV partner uuid
  * - null (no eligible)
  * - 'POOL_NOT_FOUND' (missing pool key)
  */
@@ -45,7 +45,6 @@ final class DeficitMatcher
         // ISO-8601 day of week: 1..7 (Mon..Sun). Must match `availability_utc` format.
         $nowDayOfWeek = (int) $utc->format('N');
         $nowMin = ((int) $utc->format('G')) * 60 + (int) $utc->format('i');
-        $localDay = intdiv($utcTs, 86400);
 
         $alpha = $this->rateExponent;
 
@@ -57,8 +56,8 @@ final class DeficitMatcher
                 (string) $nowMin,
                 (string) $utcTs,
                 (string) self::DAILY_COUNTER_TTL_SECONDS,
-                (string) $localDay,
                 (string) $alpha,
+                $this->keys->prefix(),
             ],
             1,
         );

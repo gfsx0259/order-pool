@@ -10,8 +10,9 @@ use Enthusiast\WorkerTemplate\RedisClientInterface;
 /**
  * Writes LM real orders into Redis in a single place (shared between API + workers).
  *
- * Stores data under `order:{id}:data` and adds order id into:
- * - `preset:{presetId}:orders_pool` (SET)  — unified pool for WD-RR
+ * Unified order schema (same as IREV virtual orders):
+ * - order:{id}:data HASH: source, rate, availability_utc, capacity, partner_id, preset_id, daily_tz_offset
+ * - order:{id}:sold:{day} STRING: locally routed leads count
  */
 final readonly class LmOrderSync
 {
@@ -21,55 +22,47 @@ final readonly class LmOrderSync
     ) {}
 
     /**
-     * Upserts one LM order.
-     *
-     * @param int $orderId LM order id (numeric)
-     * @param int $presetId preset id
-     * @param string $partnerId LM partner id
-     * @param int $finalPrice order CPL price
-     * @param string $availabilityUtc "D:START-END,..." (LM weekly windows)
-     * @param int|null $dailyLimit order daily limit
-     * @param int $dailyTzOffset seconds (for local day counters, legacy)
+     * @param int|null $capacity Daily limit; empty/null means unlimited.
      */
     public function upsert(
         int $orderId,
         int $presetId,
         string $partnerId,
-        int $finalPrice,
+        int $rate,
         string $availabilityUtc,
-        ?int $dailyLimit,
-        int $dailyTzOffset,
+        ?int $capacity,
+        int $dailyTzOffset = 0,
     ): void {
-        $dataKey = $this->keys->orderDataKey((string) $orderId);
+        $orderIdStr = (string) $orderId;
+        $dataKey = $this->keys->orderDataKey($orderIdStr);
         $poolKey = $this->keys->presetOrderPoolKey($presetId);
 
         $this->redis->multi(\Redis::PIPELINE);
 
-        // Backward compatible schema (worker-matcher Lua reads these fields)
         $this->redis->hMSet($dataKey, [
+            'source' => 'lm',
             'partner_id' => $partnerId,
             'preset_id' => (string) $presetId,
-            'final_price' => (string) $finalPrice,
+            'rate' => (string) $rate,
             'availability_utc' => $availabilityUtc,
-            'daily_limit' => $dailyLimit !== null ? (string) $dailyLimit : '',
+            'capacity' => $capacity !== null ? (string) $capacity : '',
             'daily_tz_offset' => (string) $dailyTzOffset,
         ]);
 
-        // Unified pool for WD-RR
-        $this->redis->rawCommand('SADD', $poolKey, (string) $orderId);
+        $this->redis->rawCommand('SADD', $poolKey, $orderIdStr);
 
         $this->redis->exec();
     }
 
     public function remove(int $orderId, int $presetId): void
     {
-        $dataKey = $this->keys->orderDataKey((string) $orderId);
+        $orderIdStr = (string) $orderId;
+        $dataKey = $this->keys->orderDataKey($orderIdStr);
         $poolKey = $this->keys->presetOrderPoolKey($presetId);
 
         $this->redis->multi(\Redis::PIPELINE);
         $this->redis->del($dataKey);
-        $this->redis->rawCommand('SREM', $poolKey, (string) $orderId);
+        $this->redis->rawCommand('SREM', $poolKey, $orderIdStr);
         $this->redis->exec();
     }
 }
-

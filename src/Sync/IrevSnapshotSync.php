@@ -7,6 +7,7 @@ namespace Enthusiast\OrderPool\Sync;
 use DateTimeImmutable;
 use DateTimeZone;
 use Enthusiast\OrderPool\Redis\KeySchema;
+use Enthusiast\OrderPool\Schedule\LocalDay;
 use Enthusiast\OrderPool\Snapshot\SnapshotDocument;
 use Enthusiast\OrderPool\Snapshot\IrevOrderSlot;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
@@ -17,7 +18,7 @@ use Psr\Log\LoggerInterface;
  *
  * - Filters CPL only (payment_model == 'cpl')
  * - Upserts virtual orders `irev:{partner_uuid}` into `preset:{id}:orders_pool`
- * - Stores remaining in dedicated key `irev:{uuid}:remaining`
+ * - capacity in order hash = remaining from snapshot; sold counter reset on each sync
  */
 final readonly class IrevSnapshotSync
 {
@@ -81,7 +82,6 @@ final readonly class IrevSnapshotSync
             return sprintf('%d:%d-%d', $today, $startUtc, $endUtc);
         }
 
-        // Night-wrap: evening today + early morning next UTC day (same local shift).
         $next = $today === 7 ? 1 : $today + 1;
 
         return sprintf('%d:%d-%d,%d:%d-%d', $today, $startUtc, 1440, $next, 0, $endUtc);
@@ -98,11 +98,8 @@ final readonly class IrevSnapshotSync
         $existing = $this->smembers($poolKey);
         $existingSet = array_fill_keys($existing, true);
 
-        $newOrderIds = [];
-
         foreach ($slots as $slot) {
-            $paymentModel = $slot->paymentModel;
-            if ($paymentModel !== 'cpl') {
+            if ($slot->paymentModel !== 'cpl') {
                 continue;
             }
             $partnerUuid = $slot->partnerUuid;
@@ -111,50 +108,36 @@ final readonly class IrevSnapshotSync
             }
 
             $orderId = 'irev:' . $partnerUuid;
-            $newOrderIds[] = $orderId;
-
-            $rate = $slot->rate;
-            $remaining = $slot->remaining;
-            $schedule = $slot->schedule;
-            $scheduleTz = $slot->scheduleTz;
-            $availabilityUtc = $this->buildAvailabilityUtc($schedule, $scheduleTz);
-            $partnerName = $slot->partnerName;
+            $availabilityUtc = $this->buildAvailabilityUtc($slot->schedule, $slot->scheduleTz);
+            $dailyTzOffset = LocalDay::tzOffsetFromIrevScheduleTz($slot->scheduleTz);
+            $localDay = LocalDay::resolve($dailyTzOffset);
 
             $dataKey = $this->keys->orderDataKey($orderId);
             $this->redis->hMSet($dataKey, [
                 'source' => 'irev',
-                'partner_uuid' => $partnerUuid,
-                'partner_name' => $partnerName,
-                'payment_model' => 'cpl',
-                'rate' => $rate !== null ? (string)$rate : '',
-                // Make IREV window compatible with LM availability logic.
+                'partner_id' => $partnerUuid,
+                'partner_name' => $slot->partnerName,
+                'rate' => $slot->rate !== null ? (string) $slot->rate : '',
                 'availability_utc' => $availabilityUtc,
-                // Keep original schedule for debugging / auditing.
-                'schedule' => $schedule,
-                'schedule_tz' => $scheduleTz,
+                'capacity' => $slot->remaining !== null ? (string) $slot->remaining : '',
+                'schedule' => $slot->schedule,
+                'schedule_tz' => $slot->scheduleTz,
+                'daily_tz_offset' => (string) $dailyTzOffset,
             ]);
 
-            if ($remaining !== null) {
-                $this->redis->set($this->keys->irevRemainingKey($partnerUuid), (string)$remaining);
-            }
+            // Snapshot remaining is authoritative — reset local sold since last sync.
+            $this->redis->del($this->keys->orderSoldKey($orderId, $localDay));
 
-            // add to pool
             $this->redis->rawCommand('SADD', $poolKey, $orderId);
             unset($existingSet[$orderId]);
         }
 
-        // Remove stale IREV orders from pool (keep LM orders if present).
         foreach (array_keys($existingSet) as $staleOrderId) {
             if (!str_starts_with($staleOrderId, 'irev:')) {
                 continue;
             }
             $this->redis->rawCommand('SREM', $poolKey, $staleOrderId);
             $this->redis->del($this->keys->orderDataKey($staleOrderId));
-            $uuid = substr($staleOrderId, 5);
-            if ($uuid !== '') {
-                $this->redis->del($this->keys->irevRemainingKey($uuid));
-                // NOTE: lm_assigned keys are day-scoped; keep them (TTL recommended elsewhere).
-            }
         }
     }
 
@@ -176,4 +159,3 @@ final readonly class IrevSnapshotSync
         return $out;
     }
 }
-

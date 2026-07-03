@@ -3,11 +3,24 @@ local now_dow = tonumber(ARGV[1])
 local now_min = tonumber(ARGV[2])
 local utc_ts = tonumber(ARGV[3])
 local daily_ttl = tonumber(ARGV[4])
-local local_day = tonumber(ARGV[5])
-local alpha = tonumber(ARGV[6])
+local alpha = tonumber(ARGV[5])
+local key_prefix = ARGV[6] or ''
+
+local UNLIMITED = 1000000000
+
+local function order_data_key(order_id)
+    return key_prefix .. 'order:' .. order_id .. ':data'
+end
+
+local function resolve_local_day(tz_offset)
+    return math.floor((utc_ts + (tonumber(tz_offset) or 0)) / 86400)
+end
+
+local function order_sold_key(order_id, tz_offset)
+    return key_prefix .. 'order:' .. order_id .. ':sold:' .. tostring(resolve_local_day(tz_offset))
+end
 
 local function is_available(availability_utc)
-    -- Empty means 24/7 (LM semantics)
     if availability_utc == nil or availability_utc == false or availability_utc == '' then
         return true
     end
@@ -26,13 +39,12 @@ local function is_available(availability_utc)
     return false
 end
 
-local function get_delivered(order_id)
-    local k = 'order:' .. order_id .. ':delivered:' .. tostring(local_day)
-    return tonumber(redis.call('GET', k) or '0')
+local function get_sold(order_id, tz_offset)
+    return tonumber(redis.call('GET', order_sold_key(order_id, tz_offset)) or '0')
 end
 
-local function inc_delivered(order_id)
-    local k = 'order:' .. order_id .. ':delivered:' .. tostring(local_day)
+local function inc_sold(order_id, tz_offset)
+    local k = order_sold_key(order_id, tz_offset)
     local c = redis.call('INCR', k)
     if c == 1 then
         redis.call('EXPIRE', k, daily_ttl)
@@ -41,13 +53,28 @@ local function inc_delivered(order_id)
 end
 
 local function weight_pow(rate)
-    if rate == nil then return 0.0 end
+    if rate == nil or rate == false then
+        return 0.0
+    end
     local r = tonumber(rate)
-    if r == nil or r <= 0 then return 0.0 end
+    if r == nil or r <= 0 then
+        return 0.0
+    end
     if alpha == nil or alpha <= 0 then
         return r
     end
     return r ^ alpha
+end
+
+local function effective_capacity(capacity_str, sold)
+    if capacity_str == nil or capacity_str == false or capacity_str == '' then
+        return UNLIMITED
+    end
+    local limit = tonumber(capacity_str)
+    if limit == nil or limit <= 0 then
+        return 0
+    end
+    return limit - sold
 end
 
 local exists = redis.call('EXISTS', pool_key)
@@ -62,56 +89,42 @@ end
 
 local candidates = {}
 local sumW = 0.0
-local totalDelivered = 0
+local totalSold = 0
 
 for i = 1, #order_ids do
     local oid = order_ids[i]
-    local data_key = 'order:' .. oid .. ':data'
-    local source = redis.call('HGET', data_key, 'source')
+    local data_key = order_data_key(oid)
+    local d = redis.call('HMGET', data_key, 'source', 'rate', 'availability_utc', 'capacity', 'partner_id', 'daily_tz_offset')
 
-    if source == 'irev' then
-        local partner_uuid = redis.call('HGET', data_key, 'partner_uuid')
-        local rate = redis.call('HGET', data_key, 'rate')
-        local availability_utc = redis.call('HGET', data_key, 'availability_utc')
-        if partner_uuid ~= false and is_available(availability_utc) then
-            local rem_key = 'irev:' .. partner_uuid .. ':remaining'
-            local assigned_key = 'irev:' .. partner_uuid .. ':lm_assigned:' .. tostring(local_day)
-            local remaining = tonumber(redis.call('GET', rem_key) or '0')
-            local assigned = tonumber(redis.call('GET', assigned_key) or '0')
-            local cap = remaining - assigned
-            if cap > 0 then
-                local delivered = get_delivered(oid)
-                local w = cap * weight_pow(rate)
-                if w > 0 then
-                    sumW = sumW + w
-                    totalDelivered = totalDelivered + delivered
-                    table.insert(candidates, {kind='irev', oid=oid, uuid=partner_uuid, rate=tonumber(rate) or 0, delivered=delivered, w=w})
-                end
-            end
-        end
-    else
-        -- LM order (backward compatible with existing schema)
-        local order_data = redis.call('HMGET', data_key, 'partner_id', 'final_price', 'availability_utc', 'daily_limit', 'daily_tz_offset')
-        local partner_id = order_data[1]
-        local final_price = order_data[2]
-        local availability_utc = order_data[3]
-        local daily_limit = order_data[4]
-        local daily_tz_offset = order_data[5]
+    local source = d[1]
+    if source == false then
+        source = 'lm'
+    end
 
-        if partner_id ~= false and is_available(availability_utc) then
-            local delivered = get_delivered(oid)
-            local cap = 1e9
-            local limit = tonumber(daily_limit)
-            if limit ~= nil and limit > 0 then
-                cap = limit - delivered
-            end
-            if cap > 0 then
-                local w = cap * weight_pow(final_price)
-                if w > 0 then
-                    sumW = sumW + w
-                    totalDelivered = totalDelivered + delivered
-                    table.insert(candidates, {kind='lm', oid=oid, partner_id=partner_id, price=tonumber(final_price) or 0, delivered=delivered, w=w})
-                end
+    local rate = d[2]
+    local availability_utc = d[3]
+    local capacity_str = d[4]
+    local partner_id = d[5]
+    local daily_tz_offset = d[6]
+
+    if rate ~= false and partner_id ~= false and is_available(availability_utc) then
+        local sold = get_sold(oid, daily_tz_offset)
+        local cap = effective_capacity(capacity_str, sold)
+
+        if cap > 0 then
+            local w = cap * weight_pow(rate)
+            if w > 0 then
+                totalSold = totalSold + sold
+                sumW = sumW + w
+                table.insert(candidates, {
+                    kind = source,
+                    oid = oid,
+                    partner_id = partner_id,
+                    rate = tonumber(rate) or 0,
+                    sold = sold,
+                    w = w,
+                    daily_tz_offset = daily_tz_offset,
+                })
             end
         end
     end
@@ -123,12 +136,12 @@ end
 
 local best = nil
 local bestDef = -1e18
-local N = totalDelivered + 1
+local N = totalSold + 1
 
 for i = 1, #candidates do
     local c = candidates[i]
     local fair = N * (c.w / sumW)
-    local def = fair - c.delivered
+    local def = fair - c.sold
     if def > bestDef then
         bestDef = def
         best = c
@@ -139,17 +152,6 @@ if best == nil then
     return nil
 end
 
-if best.kind == 'lm' then
-    inc_delivered(best.oid)
-    return {'lm', best.oid, best.partner_id, tostring(best.price)}
-end
+inc_sold(best.oid, best.daily_tz_offset)
 
--- irev
-inc_delivered(best.oid)
-local assigned_key = 'irev:' .. best.uuid .. ':lm_assigned:' .. tostring(local_day)
-local a = redis.call('INCR', assigned_key)
-if a == 1 then
-    redis.call('EXPIRE', assigned_key, daily_ttl)
-end
-return {'irev', best.uuid, tostring(best.rate)}
-
+return {best.kind, best.kind == 'irev' and best.partner_id or best.oid, best.partner_id, tostring(best.rate)}
