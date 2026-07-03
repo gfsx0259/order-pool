@@ -8,7 +8,7 @@ use DateTimeImmutable;
 use DateTimeZone;
 use Enthusiast\OrderPool\Matching\DeficitMatcher;
 use Enthusiast\OrderPool\Redis\KeySchema;
-use Enthusiast\OrderPool\Schedule\LocalDay;
+use Enthusiast\OrderPool\Schedule\OrderAvailabilityNormalizer;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -27,7 +27,7 @@ final class SimulateMatcherCommand extends Command
 
     public function __construct(
         private readonly RedisClientInterface $redis,
-        private readonly LocalDay $localDay,
+        private readonly OrderAvailabilityNormalizer $availabilityNormalizer,
     ) {
         parent::__construct();
     }
@@ -72,15 +72,9 @@ final class SimulateMatcherCommand extends Command
         $stockCount = 0;
 
         for ($lead = 1; $lead <= $scenario->leads; $lead++) {
-            $result = $matcher->match(
-                $scenario->presetId,
-                $now,
-                dryRun: true,
-                debug: true,
-                debugLabel: (string) $lead,
-            );
+            $result = $matcher->match($scenario->presetId, dryRun: true);
 
-            $historyLine = $this->fetchLastHistoryLine($keys->presetMatchHistoryKey($scenario->presetId));
+            $historyLine = $this->fetchLastHistoryLine($keys->presetHistoryKey($scenario->presetId));
             $sold = $this->fetchSoldSnapshot($keys, $scenario->orders, $utcTs);
 
             if ($result === null) {
@@ -145,7 +139,7 @@ final class SimulateMatcherCommand extends Command
         }
 
         $this->redis->del($poolKey);
-        $this->redis->del($keys->presetMatchHistoryKey($scenario->presetId));
+        $this->redis->del($keys->presetHistoryKey($scenario->presetId));
 
         if ($orderIds !== []) {
             $this->redis->rawCommand('SADD', $poolKey, ...$orderIds);
@@ -154,36 +148,24 @@ final class SimulateMatcherCommand extends Command
 
     private function seedOrder(KeySchema $keys, SimulateOrder $order): void
     {
-        $availability = $this->buildAvailabilityUtc($order->schedule);
+        $availability = $this->availabilityNormalizer->fromIrev(
+            $order->schedule,
+            $order->scheduleTz,
+            $order->dailyTzOffset !== 0 ? $order->dailyTzOffset : null,
+        );
 
         $this->redis->hMSet($keys->orderDataKey($order->id), [
             'source' => $order->source,
             'partner_id' => $order->partnerId,
-            'partner_name' => $order->partnerName,
             'rate' => (string) $order->rate,
-            'availability_utc' => $availability,
+            'availability_utc' => $availability->availabilityUtc,
             'capacity' => (string) $order->capacity,
-            'schedule' => $order->schedule,
-            'schedule_tz' => $order->scheduleTz,
-            'daily_tz_offset' => (string) $order->dailyTzOffset,
+            'daily_tz_offset' => (string) $availability->dailyTzOffset,
         ]);
 
-        $localDay = $this->localDay->resolve($order->dailyTzOffset);
+        $localDay = $this->availabilityNormalizer->resolveLocalDay($availability->dailyTzOffset);
         $this->redis->del($keys->orderSoldDryKey($order->id, $localDay));
         $this->redis->del($keys->orderSoldKey($order->id, $localDay));
-    }
-
-    private function buildAvailabilityUtc(string $schedule): string
-    {
-        if ($schedule === '' || !preg_match('/^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/', $schedule, $m)) {
-            return '';
-        }
-
-        $start = ((int) $m[1]) * 60 + (int) $m[2];
-        $end = ((int) $m[3]) * 60 + (int) $m[4];
-        $today = (int) (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('N');
-
-        return sprintf('%d:%d-%d', $today, $start, $end);
     }
 
     /**
@@ -195,7 +177,7 @@ final class SimulateMatcherCommand extends Command
     {
         $sold = [];
         foreach ($orders as $order) {
-            $localDay = intdiv($utcTs + $order->dailyTzOffset, 86400);
+            $localDay = $this->availabilityNormalizer->resolveLocalDay($order->dailyTzOffset, $utcTs);
             $value = $this->redis->rawCommand('GET', $keys->orderSoldDryKey($order->id, $localDay));
             $sold[$order->displayLabel()] = is_string($value) || is_int($value) ? (int) $value : 0;
         }

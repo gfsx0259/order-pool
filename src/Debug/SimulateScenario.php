@@ -41,9 +41,9 @@ final readonly class SimulateScenario
                 id: (string) ($row['id'] ?? ''),
                 source: (string) ($row['source'] ?? 'irev'),
                 partnerId: (string) ($row['partner_id'] ?? ''),
-                partnerName: (string) ($row['partner_name'] ?? ''),
                 rate: (int) ($row['rate'] ?? 0),
                 capacity: (int) ($row['capacity'] ?? 0),
+                label: (string) ($row['label'] ?? $row['partner_name'] ?? ''),
                 schedule: (string) ($row['schedule'] ?? ''),
                 scheduleTz: (string) ($row['schedule_tz'] ?? '+0000'),
                 dailyTzOffset: isset($row['daily_tz_offset']) ? (int) $row['daily_tz_offset'] : 0,
@@ -106,9 +106,9 @@ final readonly class SimulateOrder
         public string $id,
         public string $source,
         public string $partnerId,
-        public string $partnerName,
         public int $rate,
         public int $capacity,
+        public string $label = '',
         public string $schedule = '',
         public string $scheduleTz = '+0000',
         public int $dailyTzOffset = 0,
@@ -116,8 +116,8 @@ final readonly class SimulateOrder
 
     public function displayLabel(): string
     {
-        if ($this->partnerName !== '') {
-            return $this->partnerName;
+        if ($this->label !== '') {
+            return $this->label;
         }
 
         if ($this->source === 'irev') {

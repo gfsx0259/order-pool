@@ -1,5 +1,4 @@
 local pool_key = KEYS[1]
-local history_key = KEYS[2]
 local now_dow = tonumber(ARGV[1])
 local now_min = tonumber(ARGV[2])
 local utc_ts = tonumber(ARGV[3])
@@ -7,10 +6,11 @@ local daily_ttl = tonumber(ARGV[4])
 local alpha = tonumber(ARGV[5])
 local key_prefix = ARGV[6] or ''
 local dry_run = tonumber(ARGV[7]) or 0
-local debug_label = ARGV[8] or ''
-local history_max = tonumber(ARGV[9]) or 500
+local preset_id = string.match(pool_key, 'preset:(%d+):orders_pool') or ''
+local history_key = key_prefix .. 'preset:' .. preset_id .. ':history'
 
 local UNLIMITED = 1000000000
+local HISTORY_MAX = 500
 
 local function order_data_key(order_id)
     return key_prefix .. 'order:' .. order_id .. ':data'
@@ -52,60 +52,51 @@ local function get_sold(order_id, tz_offset)
 end
 
 local function inc_sold(order_id, tz_offset)
-    local k = order_sold_key(order_id, tz_offset)
-    local c = redis.call('INCR', k)
-    if c == 1 then
-        redis.call('EXPIRE', k, daily_ttl)
+    local key = order_sold_key(order_id, tz_offset)
+    local count = redis.call('INCR', key)
+    if count == 1 then
+        redis.call('EXPIRE', key, daily_ttl)
     end
-    return c
+    return count
 end
 
-local function display_cap(cap)
-    if cap >= 999999999 then
-        return 'unlim'
-    end
-    return tostring(math.floor(cap))
-end
-
-local function short_id(oid, kind)
-    if kind == 'irev' then
-        local tail = string.match(oid, '([^%-]+)$') or oid
-        if #tail >= 5 then
-            return string.sub(tail, -5)
-        end
-        return tail
-    end
-    return tostring(oid)
-end
-
-local function append_match_history(candidates, sumW, totalSold, best_oid)
-    if history_key == nil or history_key == false or history_key == '' then
-        return
-    end
-
+local function history(candidates, totalSold, winnerOrderId)
     local N = totalSold + 1
-    local parts = {}
-    for i = 1, #candidates do
-        local c = candidates[i]
-        local sid = short_id(c.oid, c.kind)
-        local kind_label = c.kind == 'irev' and 'IREV' or 'LM'
-        local status = c.oid == best_oid and 'WINNER' or 'FAIL'
-        local prefix = c.oid == best_oid and '*' or ''
-        table.insert(parts, string.format(
-            '%s%s %s %d$ %s %s',
-            prefix,
-            sid,
-            kind_label,
-            math.floor(c.rate),
-            display_cap(c.cap),
-            status
-        ))
+    local body
+
+    if winnerOrderId == nil then
+        body = string.format('N=%d | STOCK;', N)
+    else
+        local parts = {}
+        for i = 1, #candidates do
+            local candidate = candidates[i]
+            local shortId
+            if candidate.kind == 'irev' then
+                local tail = string.match(candidate.orderId, '([^%-]+)$') or candidate.orderId
+                shortId = #tail >= 5 and string.sub(tail, -5) or tail
+            else
+                shortId = tostring(candidate.orderId)
+            end
+            local capLabel = candidate.cap >= 999999999 and 'unlim' or tostring(math.floor(candidate.cap))
+            local kindLabel = candidate.kind == 'irev' and 'IREV' or 'LM'
+            local status = candidate.orderId == winnerOrderId and 'WINNER' or 'FAIL'
+            local prefix = candidate.orderId == winnerOrderId and '*' or ''
+            table.insert(parts, string.format(
+                '%s%s %s %d$ %s %s',
+                prefix,
+                shortId,
+                kindLabel,
+                math.floor(candidate.rate),
+                capLabel,
+                status
+            ))
+        end
+        body = string.format('N=%d | %s', N, table.concat(parts, '; ') .. ';')
     end
 
-    local line = string.format('N=%d | %s', N, table.concat(parts, '; ') .. ';')
-
+    local line = string.format('preset=%s | %s', preset_id, body)
     redis.call('RPUSH', history_key, line)
-    redis.call('LTRIM', history_key, -history_max, -1)
+    redis.call('LTRIM', history_key, -HISTORY_MAX, -1)
     redis.call('EXPIRE', history_key, 86400)
 end
 
@@ -134,6 +125,43 @@ local function effective_capacity(capacity_str, sold)
     return limit - sold
 end
 
+local function try_candidate(orderId)
+    local d = redis.call('HMGET', order_data_key(orderId), 'source', 'rate', 'availability_utc', 'capacity', 'partner_id', 'daily_tz_offset')
+
+    local kind = d[1]
+    local rate = d[2]
+    local availability_utc = d[3]
+    local capacity_str = d[4]
+    local partner_id = d[5]
+    local daily_tz_offset = d[6]
+
+    if kind == false or rate == false or partner_id == false or not is_available(availability_utc) then
+        return nil
+    end
+
+    local sold = get_sold(orderId, daily_tz_offset)
+    local cap = effective_capacity(capacity_str, sold)
+    if cap <= 0 then
+        return nil
+    end
+
+    local weight = cap * weight_pow(rate)
+    if weight <= 0 then
+        return nil
+    end
+
+    return {
+        kind = kind,
+        orderId = orderId,
+        partner_id = partner_id,
+        rate = tonumber(rate) or 0,
+        daily_tz_offset = daily_tz_offset,
+        sold = sold,
+        cap = cap,
+        weight = weight,
+    }
+end
+
 local exists = redis.call('EXISTS', pool_key)
 if exists == 0 then
     return "POOL_NOT_FOUND"
@@ -145,71 +173,34 @@ if order_ids == nil or #order_ids == 0 then
 end
 
 local candidates = {}
-local sumW = 0.0
+local sumWeight = 0.0
 local totalSold = 0
 
 for i = 1, #order_ids do
-    local oid = order_ids[i]
-    local data_key = order_data_key(oid)
-    local d = redis.call('HMGET', data_key, 'source', 'rate', 'availability_utc', 'capacity', 'partner_id', 'daily_tz_offset')
-
-    local source = d[1]
-    if source == false then
-        source = 'lm'
-    end
-
-    local rate = d[2]
-    local availability_utc = d[3]
-    local capacity_str = d[4]
-    local partner_id = d[5]
-    local daily_tz_offset = d[6]
-
-    if rate ~= false and partner_id ~= false and is_available(availability_utc) then
-        local sold = get_sold(oid, daily_tz_offset)
-        local cap = effective_capacity(capacity_str, sold)
-
-        if cap > 0 then
-            local w = cap * weight_pow(rate)
-            if w > 0 then
-                totalSold = totalSold + sold
-                sumW = sumW + w
-                table.insert(candidates, {
-                    kind = source,
-                    oid = oid,
-                    partner_id = partner_id,
-                    rate = tonumber(rate) or 0,
-                    sold = sold,
-                    cap = cap,
-                    w = w,
-                    daily_tz_offset = daily_tz_offset,
-                })
-            end
-        end
+    local candidate = try_candidate(order_ids[i])
+    if candidate ~= nil then
+        totalSold = totalSold + candidate.sold
+        sumWeight = sumWeight + candidate.weight
+        table.insert(candidates, candidate)
     end
 end
 
-if #candidates == 0 or sumW <= 0 then
-    if history_key ~= nil and history_key ~= false and history_key ~= '' then
-        local N = totalSold + 1
-        local line = string.format('N=%d | STOCK;', N)
-        redis.call('RPUSH', history_key, line)
-        redis.call('LTRIM', history_key, -history_max, -1)
-        redis.call('EXPIRE', history_key, 86400)
-    end
+if #candidates == 0 or sumWeight <= 0 then
+    history(candidates, totalSold, nil)
     return nil
 end
 
 local best = nil
-local bestDef = -1e18
+local bestDeficit = -1e18
 local N = totalSold + 1
 
 for i = 1, #candidates do
-    local c = candidates[i]
-    local fair = N * (c.w / sumW)
-    local def = fair - c.sold
-    if def > bestDef then
-        bestDef = def
-        best = c
+    local candidate = candidates[i]
+    local fair = N * (candidate.weight / sumWeight)
+    local deficit = fair - candidate.sold
+    if deficit > bestDeficit then
+        bestDeficit = deficit
+        best = candidate
     end
 end
 
@@ -217,8 +208,7 @@ if best == nil then
     return nil
 end
 
-append_match_history(candidates, sumW, totalSold, best.oid)
+history(candidates, totalSold, best.orderId)
+inc_sold(best.orderId, best.daily_tz_offset)
 
-inc_sold(best.oid, best.daily_tz_offset)
-
-return {best.kind, best.kind == 'irev' and best.partner_id or best.oid, best.partner_id, tostring(best.rate)}
+return {best.kind, best.kind == 'irev' and best.partner_id or best.orderId, best.partner_id, tostring(best.rate)}

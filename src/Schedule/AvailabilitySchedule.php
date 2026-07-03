@@ -14,18 +14,6 @@ final readonly class AvailabilitySchedule
         public array $windows,
     ) {}
 
-    public static function fromArray(?array $data): ?self
-    {
-        if ($data === null) {
-            return null;
-        }
-
-        return new self(
-            timezone: $data['timezone'],
-            windows: $data['windows'],
-        );
-    }
-
     public static function fromJson(mixed $value): ?self
     {
         if ($value === null || $value === '') {
@@ -45,8 +33,21 @@ final readonly class AvailabilitySchedule
         return is_array($decoded) ? self::fromArray($decoded) : null;
     }
 
+
     public function isAlwaysAvailable(): bool
     {
         return $this->windows === [];
+    }
+
+    private static function fromArray(?array $data): ?self
+    {
+        if ($data === null) {
+            return null;
+        }
+
+        return new self(
+            timezone: $data['timezone'],
+            windows: $data['windows'],
+        );
     }
 }

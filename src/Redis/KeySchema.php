@@ -25,10 +25,10 @@ final readonly class KeySchema
         return $this->prefix . sprintf('preset:%d:restore_lock', $presetId);
     }
 
-    /** WD-RR match history (debug only, Redis LIST, TTL 24h). */
-    public function presetMatchHistoryKey(int $presetId): string
+    /** WD-RR match history (Redis LIST, last 500, TTL 24h). */
+    public function presetHistoryKey(int $presetId): string
     {
-        return $this->prefix . sprintf('preset:%d:match_history', $presetId);
+        return $this->prefix . sprintf('preset:%d:history', $presetId);
     }
 
     public function orderDataKey(string $orderId): string

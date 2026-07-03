@@ -10,12 +10,11 @@ use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
- * Restores preset order pool in Redis with distributed lock (worker cache miss).
+ * Restores LM preset order pool in Redis on cache miss (distributed lock).
  *
- * LM orders are loaded from DB via {@see LmOrderPoolSync}.
- * IREV virtual orders are not restored here — they arrive via snapshot push.
+ * IREV virtual orders are not restored — they arrive via snapshot push.
  */
-final readonly class PresetPoolRestorer
+final readonly class LmPoolRestorer
 {
     private const int LOCK_TTL_SECONDS = 30;
     private const int MAX_WAIT_MICROSECONDS = 2_000_000;
@@ -24,8 +23,8 @@ final readonly class PresetPoolRestorer
     public function __construct(
         private RedisClientInterface $redis,
         private KeySchema $keys,
-        private LmOrderPoolSync $lmOrderPoolSync,
-        private ?LoggerInterface $logger = null,
+        private LmPresetPoolSync $lmPresetPoolSync,
+        private LoggerInterface $logger,
     ) {}
 
     public function restore(int $presetId): bool
@@ -38,13 +37,13 @@ final readonly class PresetPoolRestorer
         }
 
         try {
-            $this->lmOrderPoolSync->syncPresetFromDatabase($presetId);
+            $this->lmPresetPoolSync->syncFromDatabase($presetId);
 
-            $this->logger?->info('Preset pool restored from database', ['preset_id' => $presetId]);
+            $this->logger->info('LM preset pool restored from database', ['preset_id' => $presetId]);
 
             return true;
         } catch (Throwable $e) {
-            $this->logger?->error('Failed to restore preset pool', [
+            $this->logger->error('Failed to restore LM preset pool', [
                 'preset_id' => $presetId,
                 'error' => $e->getMessage(),
             ]);
@@ -62,7 +61,7 @@ final readonly class PresetPoolRestorer
 
         while ($waited < self::MAX_WAIT_MICROSECONDS) {
             if ($this->redis->exists($poolKey)) {
-                $this->logger?->debug('Preset pool restored by another worker', ['preset_id' => $presetId]);
+                $this->logger->debug('LM preset pool restored by another worker', ['preset_id' => $presetId]);
 
                 return true;
             }
@@ -71,7 +70,7 @@ final readonly class PresetPoolRestorer
             $waited += self::WAIT_STEP_MICROSECONDS;
         }
 
-        $this->logger?->warning('Timeout waiting for preset pool restoration', ['preset_id' => $presetId]);
+        $this->logger->warning('Timeout waiting for LM preset pool restoration', ['preset_id' => $presetId]);
 
         return false;
     }
