@@ -189,6 +189,13 @@ for i = 1, #order_ids do
 end
 
 if #candidates == 0 or sumW <= 0 then
+    if history_key ~= nil and history_key ~= false and history_key ~= '' then
+        local N = totalSold + 1
+        local line = string.format('N=%d | STOCK;', N)
+        redis.call('RPUSH', history_key, line)
+        redis.call('LTRIM', history_key, -history_max, -1)
+        redis.call('EXPIRE', history_key, 86400)
+    end
     return nil
 end
 
