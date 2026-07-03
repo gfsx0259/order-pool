@@ -26,6 +26,25 @@ final readonly class AvailabilitySchedule
         );
     }
 
+    public static function fromJson(mixed $value): ?self
+    {
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (is_array($value)) {
+            return self::fromArray($value);
+        }
+
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $decoded = json_decode($value, true);
+
+        return is_array($decoded) ? self::fromArray($decoded) : null;
+    }
+
     public function isAlwaysAvailable(): bool
     {
         return $this->windows === [];

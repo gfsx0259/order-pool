@@ -11,7 +11,7 @@ final class AvailabilityScheduleUtc
 {
     private const string REFERENCE_MONDAY = '2024-01-01';
 
-    public static function toUtcWindows(?AvailabilitySchedule $schedule): string
+    public function resolveUtcWindows(?AvailabilitySchedule $schedule): string
     {
         if ($schedule === null || $schedule->isAlwaysAvailable()) {
             return '';
@@ -22,7 +22,7 @@ final class AvailabilityScheduleUtc
 
         foreach ($schedule->windows as $window) {
             foreach ($window['days'] as $dayOfWeek) {
-                $referenceDate = self::referenceDateForDay($dayOfWeek);
+                $referenceDate = $this->referenceDateForDay($dayOfWeek);
 
                 $startLocal = new DateTimeImmutable(
                     $referenceDate . ' ' . $window['start'] . ':00',
@@ -43,8 +43,8 @@ final class AvailabilityScheduleUtc
                 }
 
                 $utcDow = (int) $startUtc->format('N');
-                $startMin = self::minutesFromMidnight($startUtc);
-                $endMin = self::minutesFromMidnight($endUtc);
+                $startMin = $this->minutesFromMidnight($startUtc);
+                $endMin = $this->minutesFromMidnight($endUtc);
 
                 $segments[] = sprintf('%d:%d-%d', $utcDow, $startMin, $endMin);
             }
@@ -53,14 +53,14 @@ final class AvailabilityScheduleUtc
         return implode(',', $segments);
     }
 
-    private static function referenceDateForDay(int $isoDayOfWeek): string
+    private function referenceDateForDay(int $isoDayOfWeek): string
     {
         $monday = new DateTimeImmutable(self::REFERENCE_MONDAY);
 
         return $monday->modify('+' . ($isoDayOfWeek - 1) . ' days')->format('Y-m-d');
     }
 
-    private static function minutesFromMidnight(DateTimeImmutable $dt): int
+    private function minutesFromMidnight(DateTimeImmutable $dt): int
     {
         return ((int) $dt->format('G')) * 60 + (int) $dt->format('i');
     }

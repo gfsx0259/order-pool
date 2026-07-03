@@ -27,6 +27,8 @@ final readonly class LmOrderPoolSync
         private RedisClientInterface $redis,
         private KeySchema $keys,
         private LmOrderSync $lmOrderSync,
+        private AvailabilityScheduleUtc $availabilityScheduleUtc,
+        private LocalDay $localDay,
         private ?LoggerInterface $logger = null,
     ) {}
 
@@ -75,10 +77,10 @@ final readonly class LmOrderPoolSync
 
             foreach ($rows as $row) {
                 $orderId = (int) $row['id'];
-                $effectiveSchedule = LocalDay::parseScheduleJson($row['order_schedule'])
-                    ?? LocalDay::parseScheduleJson($row['user_schedule']);
-                $tzOffset = LocalDay::tzOffsetFromSchedule($effectiveSchedule);
-                $currentLocalDay = LocalDay::resolve($tzOffset);
+                $schedule = AvailabilitySchedule::fromJson($row['order_schedule'])
+                    ?? AvailabilitySchedule::fromJson($row['user_schedule']);
+                $tzOffset = $this->localDay->tzOffset($schedule);
+                $currentLocalDay = $this->localDay->resolve($tzOffset);
                 $soldKey = $this->keys->orderSoldKey((string) $orderId, $currentLocalDay);
 
                 $dbLocalDay = $row['daily_received_local_day'] !== null
@@ -150,11 +152,10 @@ final readonly class LmOrderPoolSync
      */
     private function mapRowToSnapshot(array $row): LmOrderSnapshot
     {
-        $effectiveSchedule = LocalDay::parseScheduleJson($row['order_schedule'])
-            ?? LocalDay::parseScheduleJson($row['user_schedule']);
-        $schedule = AvailabilitySchedule::fromArray($effectiveSchedule);
-        $availabilityUtc = AvailabilityScheduleUtc::toUtcWindows($schedule);
-        $tzOffset = LocalDay::tzOffsetFromSchedule($effectiveSchedule);
+        $schedule = AvailabilitySchedule::fromJson($row['order_schedule'])
+            ?? AvailabilitySchedule::fromJson($row['user_schedule']);
+        $availabilityUtc = $this->availabilityScheduleUtc->resolveUtcWindows($schedule);
+        $tzOffset = $this->localDay->tzOffset($schedule);
 
         return new LmOrderSnapshot(
             orderId: (int) $row['id'],
@@ -175,7 +176,7 @@ final readonly class LmOrderPoolSync
             return;
         }
 
-        $currentLocalDay = LocalDay::resolve($order->dailyTzOffset);
+        $currentLocalDay = $this->localDay->resolve($order->dailyTzOffset);
         $soldKey = $this->keys->orderSoldKey((string) $order->orderId, $currentLocalDay);
 
         if ($order->dailyReceivedLocalDay !== $currentLocalDay) {

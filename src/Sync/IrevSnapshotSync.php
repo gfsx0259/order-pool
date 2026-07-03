@@ -25,6 +25,7 @@ final readonly class IrevSnapshotSync
     public function __construct(
         private RedisClientInterface $redis,
         private KeySchema $keys,
+        private LocalDay $localDay,
         private ?LoggerInterface $logger = null,
     ) {}
 
@@ -109,8 +110,8 @@ final readonly class IrevSnapshotSync
 
             $orderId = 'irev:' . $partnerUuid;
             $availabilityUtc = $this->buildAvailabilityUtc($slot->schedule, $slot->scheduleTz);
-            $dailyTzOffset = LocalDay::tzOffsetFromIrevScheduleTz($slot->scheduleTz);
-            $localDay = LocalDay::resolve($dailyTzOffset);
+            $dailyTzOffset = $this->localDay->tzOffsetFromIrevScheduleTz($slot->scheduleTz);
+            $localDay = $this->localDay->resolve($dailyTzOffset);
 
             $dataKey = $this->keys->orderDataKey($orderId);
             $this->redis->hMSet($dataKey, [
