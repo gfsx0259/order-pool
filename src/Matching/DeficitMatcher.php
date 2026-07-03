@@ -36,9 +36,21 @@ final class DeficitMatcher
     /**
      * @return array<int, string>|null|string
      */
-    public function match(int $presetId, DateTimeImmutable $nowUtc, bool $dryRun = false): array|string|null
-    {
+    public function match(
+        int $presetId,
+        DateTimeImmutable $nowUtc,
+        bool $dryRun = false,
+        bool $debug = false,
+        ?string $debugLabel = null,
+    ): array|string|null {
         $poolKey = $this->keys->presetOrderPoolKey($presetId);
+
+        $keys = [$poolKey];
+        $numKeys = 1;
+        if ($debug) {
+            $keys[] = $this->keys->presetMatchHistoryKey($presetId);
+            $numKeys = 2;
+        }
 
         $tz = new DateTimeZone('UTC');
 
@@ -53,7 +65,7 @@ final class DeficitMatcher
         return $this->redis->eval(
             self::script(),
             [
-                $poolKey,
+                ...$keys,
                 (string) $nowDayOfWeek,
                 (string) $nowMin,
                 (string) $utcTs,
@@ -61,8 +73,10 @@ final class DeficitMatcher
                 (string) $alpha,
                 $this->keys->prefix(),
                 $dryRun ? '1' : '0',
+                $debugLabel ?? '',
+                '500',
             ],
-            1,
+            $numKeys,
         );
     }
 

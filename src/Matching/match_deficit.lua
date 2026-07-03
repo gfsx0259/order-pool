@@ -1,4 +1,5 @@
 local pool_key = KEYS[1]
+local history_key = KEYS[2]
 local now_dow = tonumber(ARGV[1])
 local now_min = tonumber(ARGV[2])
 local utc_ts = tonumber(ARGV[3])
@@ -6,6 +7,8 @@ local daily_ttl = tonumber(ARGV[4])
 local alpha = tonumber(ARGV[5])
 local key_prefix = ARGV[6] or ''
 local dry_run = tonumber(ARGV[7]) or 0
+local debug_label = ARGV[8] or ''
+local history_max = tonumber(ARGV[9]) or 500
 
 local UNLIMITED = 1000000000
 
@@ -55,6 +58,47 @@ local function inc_sold(order_id, tz_offset)
         redis.call('EXPIRE', k, daily_ttl)
     end
     return c
+end
+
+local function append_match_history(candidates, sumW, totalSold, best_oid)
+    if history_key == nil or history_key == false or history_key == '' then
+        return
+    end
+
+    local N = totalSold + 1
+    local lines = {}
+    for i = 1, #candidates do
+        local c = candidates[i]
+        local fair = N * (c.w / sumW)
+        local def = fair - c.sold
+        local mark = c.oid == best_oid and 'WIN ' or '    '
+        table.insert(lines, string.format(
+            '%s%s | kind=%-4s | rate=%4s | sold=%3d | w=%8.1f | fair=%6.2f | def=%7.2f',
+            mark,
+            c.oid,
+            c.kind,
+            tostring(c.rate),
+            c.sold,
+            c.w,
+            fair,
+            def
+        ))
+    end
+
+    local label = debug_label ~= '' and debug_label or '-'
+    local header = string.format(
+        '=== lead=%s utc=%d N=%d totalSold=%d winner=%s ===',
+        label,
+        utc_ts,
+        N,
+        totalSold,
+        best_oid
+    )
+    local block = header .. '\n' .. table.concat(lines, '\n')
+
+    redis.call('RPUSH', history_key, block)
+    redis.call('LTRIM', history_key, -history_max, -1)
+    redis.call('EXPIRE', history_key, 86400)
 end
 
 local function weight_pow(rate)
@@ -156,6 +200,8 @@ end
 if best == nil then
     return nil
 end
+
+append_match_history(candidates, sumW, totalSold, best.oid)
 
 inc_sold(best.oid, best.daily_tz_offset)
 
