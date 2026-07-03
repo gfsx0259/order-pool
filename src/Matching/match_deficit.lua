@@ -60,43 +60,51 @@ local function inc_sold(order_id, tz_offset)
     return c
 end
 
+local function display_cap(cap)
+    if cap >= 999999999 then
+        return 'unlim'
+    end
+    return tostring(math.floor(cap))
+end
+
+local function short_id(oid, kind)
+    if kind == 'irev' then
+        local tail = string.match(oid, '([^%-]+)$') or oid
+        if #tail >= 5 then
+            return string.sub(tail, -5)
+        end
+        return tail
+    end
+    return tostring(oid)
+end
+
 local function append_match_history(candidates, sumW, totalSold, best_oid)
     if history_key == nil or history_key == false or history_key == '' then
         return
     end
 
     local N = totalSold + 1
-    local lines = {}
+    local parts = {}
     for i = 1, #candidates do
         local c = candidates[i]
-        local fair = N * (c.w / sumW)
-        local def = fair - c.sold
-        local mark = c.oid == best_oid and 'WIN ' or '    '
-        table.insert(lines, string.format(
-            '%s%s | kind=%-4s | rate=%4s | sold=%3d | w=%8.1f | fair=%6.2f | def=%7.2f',
-            mark,
-            c.oid,
-            c.kind,
-            tostring(c.rate),
-            c.sold,
-            c.w,
-            fair,
-            def
+        local sid = short_id(c.oid, c.kind)
+        local kind_label = c.kind == 'irev' and 'IREV' or 'LM'
+        local status = c.oid == best_oid and 'WINNER' or 'FAIL'
+        local prefix = c.oid == best_oid and '*' or ''
+        table.insert(parts, string.format(
+            '%s%s %s %d$ %s %s',
+            prefix,
+            sid,
+            kind_label,
+            math.floor(c.rate),
+            display_cap(c.cap),
+            status
         ))
     end
 
-    local label = debug_label ~= '' and debug_label or '-'
-    local header = string.format(
-        '=== lead=%s utc=%d N=%d totalSold=%d winner=%s ===',
-        label,
-        utc_ts,
-        N,
-        totalSold,
-        best_oid
-    )
-    local block = header .. '\n' .. table.concat(lines, '\n')
+    local line = string.format('N=%d | %s', N, table.concat(parts, '; ') .. ';')
 
-    redis.call('RPUSH', history_key, block)
+    redis.call('RPUSH', history_key, line)
     redis.call('LTRIM', history_key, -history_max, -1)
     redis.call('EXPIRE', history_key, 86400)
 end
@@ -171,6 +179,7 @@ for i = 1, #order_ids do
                     partner_id = partner_id,
                     rate = tonumber(rate) or 0,
                     sold = sold,
+                    cap = cap,
                     w = w,
                     daily_tz_offset = daily_tz_offset,
                 })
