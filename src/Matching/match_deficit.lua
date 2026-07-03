@@ -5,6 +5,7 @@ local utc_ts = tonumber(ARGV[3])
 local daily_ttl = tonumber(ARGV[4])
 local alpha = tonumber(ARGV[5])
 local key_prefix = ARGV[6] or ''
+local dry_run = tonumber(ARGV[7]) or 0
 
 local UNLIMITED = 1000000000
 
@@ -17,7 +18,11 @@ local function resolve_local_day(tz_offset)
 end
 
 local function order_sold_key(order_id, tz_offset)
-    return key_prefix .. 'order:' .. order_id .. ':sold:' .. tostring(resolve_local_day(tz_offset))
+    local day = tostring(resolve_local_day(tz_offset))
+    if dry_run == 1 then
+        return key_prefix .. 'order:' .. order_id .. ':sold_dry:' .. day
+    end
+    return key_prefix .. 'order:' .. order_id .. ':sold:' .. day
 end
 
 local function is_available(availability_utc)

@@ -37,4 +37,12 @@ final readonly class KeySchema
     {
         return $this->prefix . sprintf('order:%s:sold:%d', $orderId, $localDay);
     }
+
+    /**
+     * Dry-run WD-RR counters (separate from prod {@see orderSoldKey}).
+     */
+    public function orderSoldDryKey(string $orderId, int $localDay): string
+    {
+        return $this->prefix . sprintf('order:%s:sold_dry:%d', $orderId, $localDay);
+    }
 }

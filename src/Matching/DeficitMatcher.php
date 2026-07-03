@@ -19,6 +19,8 @@ use Enthusiast\WorkerTemplate\RedisClientInterface;
  *   refId = LM order id (numeric string) or IREV partner uuid
  * - null (no eligible)
  * - 'POOL_NOT_FOUND' (missing pool key)
+ *
+ * When $dryRun=true, sold counters use `order:{id}:sold_dry:{day}` instead of `sold`.
  */
 final class DeficitMatcher
 {
@@ -34,7 +36,7 @@ final class DeficitMatcher
     /**
      * @return array<int, string>|null|string
      */
-    public function match(int $presetId, DateTimeImmutable $nowUtc): array|string|null
+    public function match(int $presetId, DateTimeImmutable $nowUtc, bool $dryRun = false): array|string|null
     {
         $poolKey = $this->keys->presetOrderPoolKey($presetId);
 
@@ -58,6 +60,7 @@ final class DeficitMatcher
                 (string) self::DAILY_COUNTER_TTL_SECONDS,
                 (string) $alpha,
                 $this->keys->prefix(),
+                $dryRun ? '1' : '0',
             ],
             1,
         );
