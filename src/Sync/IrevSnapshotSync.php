@@ -134,7 +134,7 @@ final readonly class IrevSnapshotSync
         }
 
         foreach (array_keys($existingSet) as $staleOrderId) {
-            if (!str_starts_with($staleOrderId, 'irev:')) {
+            if (!str_starts_with((string) $staleOrderId, 'irev:')) {
                 continue;
             }
             $this->redis->rawCommand('SREM', $poolKey, $staleOrderId);
