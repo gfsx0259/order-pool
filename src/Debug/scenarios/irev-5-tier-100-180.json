@@ -1,0 +1,60 @@
+{
+  "name": "5 IREV tiers $100–$180 (cap 100 each, 100 leads)",
+  "preset_id": 1,
+  "leads": 100,
+  "rate_exponent": 1.5,
+  "prefix": "dbg:",
+  "output": "irev-5-tier-100-180-report.html",
+  "orders": [
+    {
+      "id": "irev:00000000-0000-0000-0000-000000000001",
+      "source": "irev",
+      "partner_id": "00000000-0000-0000-0000-000000000001",
+      "partner_name": "IREV $100",
+      "rate": 100,
+      "capacity": 100,
+      "schedule": "",
+      "schedule_tz": "+0000"
+    },
+    {
+      "id": "irev:00000000-0000-0000-0000-000000000002",
+      "source": "irev",
+      "partner_id": "00000000-0000-0000-0000-000000000002",
+      "partner_name": "IREV $120",
+      "rate": 120,
+      "capacity": 100,
+      "schedule": "",
+      "schedule_tz": "+0000"
+    },
+    {
+      "id": "irev:00000000-0000-0000-0000-000000000003",
+      "source": "irev",
+      "partner_id": "00000000-0000-0000-0000-000000000003",
+      "partner_name": "IREV $140",
+      "rate": 140,
+      "capacity": 100,
+      "schedule": "",
+      "schedule_tz": "+0000"
+    },
+    {
+      "id": "irev:00000000-0000-0000-0000-000000000004",
+      "source": "irev",
+      "partner_id": "00000000-0000-0000-0000-000000000004",
+      "partner_name": "IREV $160",
+      "rate": 160,
+      "capacity": 100,
+      "schedule": "",
+      "schedule_tz": "+0000"
+    },
+    {
+      "id": "irev:00000000-0000-0000-0000-000000000005",
+      "source": "irev",
+      "partner_id": "00000000-0000-0000-0000-000000000005",
+      "partner_name": "IREV $180",
+      "rate": 180,
+      "capacity": 100,
+      "schedule": "",
+      "schedule_tz": "+0000"
+    }
+  ]
+}
