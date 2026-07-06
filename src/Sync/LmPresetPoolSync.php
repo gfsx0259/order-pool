@@ -28,7 +28,7 @@ final readonly class LmPresetPoolSync
         private KeySchema $keys,
         private OrderSync $orderSync,
         private OrderAvailabilityNormalizer $availabilityNormalizer,
-        private ?LoggerInterface $logger = null,
+        private LoggerInterface $logger,
     ) {}
 
     /** Sync all active LM orders for a preset from DB into Redis. */
@@ -58,7 +58,7 @@ final readonly class LmPresetPoolSync
             $this->upsert($this->mapRowToSnapshot($row));
         }
 
-        $this->logger?->info('LM preset synced to Redis', [
+        $this->logger->info('LM preset synced to Redis', [
             'preset_id' => $presetId,
             'orders' => count($rows),
         ]);
@@ -121,13 +121,13 @@ final readonly class LmPresetPoolSync
                 $clearedCount++;
             }
 
-            $this->logger?->info('LM sold counters synced from database', [
+            $this->logger->info('LM sold counters synced from database', [
                 'orders' => count($rows),
                 'set' => $setCount,
                 'cleared' => $clearedCount,
             ]);
         } catch (Throwable $e) {
-            $this->logger?->error('LM sold counter sync failed', [
+            $this->logger->error('LM sold counter sync failed', [
                 'error' => $e->getMessage(),
             ]);
 
