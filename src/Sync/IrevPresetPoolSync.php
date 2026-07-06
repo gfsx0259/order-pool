@@ -22,7 +22,8 @@ final readonly class IrevPresetPoolSync
         $poolKey = $this->keys->presetOrderPoolKey($preset->presetId);
 
         /** @var list<string> $existing */
-        $existing = $this->smembers($poolKey);
+        $existing = $this->redis->sMembers($poolKey);
+
         $existingSet = array_fill_keys($existing, true);
 
         foreach ($preset->orders as $order) {
@@ -41,24 +42,5 @@ final readonly class IrevPresetPoolSync
             $this->redis->rawCommand('SREM', $poolKey, $staleOrderId);
             $this->redis->del($this->keys->orderDataKey($staleOrderId));
         }
-    }
-
-    /**
-     * @return list<string>
-     */
-    private function smembers(string $key): array
-    {
-        $res = $this->redis->rawCommand('SMEMBERS', $key);
-        if (!is_array($res)) {
-            return [];
-        }
-        $out = [];
-        foreach ($res as $v) {
-            if (is_string($v) && $v !== '') {
-                $out[] = $v;
-            }
-        }
-
-        return $out;
     }
 }
