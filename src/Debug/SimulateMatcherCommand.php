@@ -9,6 +9,7 @@ use DateTimeZone;
 use Enthusiast\OrderPool\Matching\DeficitMatcher;
 use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\OrderPool\Schedule\OrderAvailabilityNormalizer;
+use Enthusiast\OrderPool\ValueObject\Order;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
@@ -62,8 +63,13 @@ final class SimulateMatcherCommand extends Command
         $orderLabels = [];
         foreach ($scenario->orders as $order) {
             $orderLabels[$order->id] = $order->displayLabel();
-            if ($order->source === 'irev' && !str_starts_with($order->id, 'irev:')) {
-                throw new \InvalidArgumentException("IREV order id must start with irev:, got {$order->id}");
+            if ($order->source === 'irev') {
+                $expectedId = Order::irevOrderId($scenario->presetId, $order->partnerId);
+                if ($order->id !== $expectedId) {
+                    throw new \InvalidArgumentException(
+                        "IREV order id must be $expectedId, got $order->id",
+                    );
+                }
             }
         }
 
@@ -95,7 +101,7 @@ final class SimulateMatcherCommand extends Command
             }
 
             [$kind, $refId, $partnerId] = array_pad($result, 3, null);
-            $winnerKey = $this->resolveWinnerKey($kind, $refId, $partnerId, $scenario->orders);
+            $winnerKey = $this->resolveWinnerKey($kind, $refId, $partnerId, $scenario->orders, $scenario->presetId);
             $winnerLabel = $orderLabels[$winnerKey] ?? (string) $refId;
             $winnerCounts[$winnerLabel] = ($winnerCounts[$winnerLabel] ?? 0) + 1;
 
@@ -195,7 +201,7 @@ final class SimulateMatcherCommand extends Command
     /**
      * @param list<SimulateOrder> $orders
      */
-    private function resolveWinnerKey(mixed $kind, mixed $refId, mixed $partnerId, array $orders): string
+    private function resolveWinnerKey(mixed $kind, mixed $refId, mixed $partnerId, array $orders, int $presetId): string
     {
         if ($kind === 'lm') {
             return (string) $refId;
@@ -207,7 +213,7 @@ final class SimulateMatcherCommand extends Command
             }
         }
 
-        return 'irev:' . $partnerId;
+        return Order::irevOrderId($presetId, (string) $partnerId);
     }
 
     /**

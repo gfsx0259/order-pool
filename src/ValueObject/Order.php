@@ -8,7 +8,7 @@ namespace Enthusiast\OrderPool\ValueObject;
  * Normalized order for Redis pool sync (LM + IREV).
  *
  * Ingress must set availabilityUtc + dailyTzOffset.
- * orderId: numeric string for LM ("42"), "irev:{uuid}" for IREV virtual orders.
+ * orderId: numeric string for LM ("42"), "irev:{presetId}:{partnerUuid}" for IREV.
  */
 final readonly class Order
 {
@@ -23,6 +23,11 @@ final readonly class Order
         public ?int $dailyReceivedLocalDay = null,
         public int $dailyTzOffset = 0,
     ) {}
+
+    public static function irevOrderId(int $presetId, string $partnerUuid): string
+    {
+        return sprintf('irev:%d:%s', $presetId, $partnerUuid);
+    }
 
     public function isIrev(): bool
     {

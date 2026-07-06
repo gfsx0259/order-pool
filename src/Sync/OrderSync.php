@@ -37,14 +37,12 @@ final readonly class OrderSync
         $fields = [
             'source' => $order->isIrev() ? 'irev' : 'lm',
             'partner_id' => $order->partnerId,
+            'preset_id' => (string) $order->presetId,
             'rate' => (string) $order->rate,
             'availability_utc' => $order->availabilityUtc,
             'capacity' => $order->capacity !== null ? (string) $order->capacity : '',
             'daily_tz_offset' => (string) $order->dailyTzOffset,
         ];
-        if (!$order->isIrev()) {
-            $fields['preset_id'] = (string) $order->presetId;
-        }
 
         $this->redis->multi(\Redis::PIPELINE);
         $this->redis->hMSet($dataKey, $fields);
