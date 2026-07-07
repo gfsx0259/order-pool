@@ -156,6 +156,7 @@ local function try_candidate(orderId)
         partner_id = partner_id,
         rate = tonumber(rate) or 0,
         daily_tz_offset = daily_tz_offset,
+        capacity_str = capacity_str,
         sold = sold,
         cap = cap,
         weight = weight,
@@ -211,4 +212,20 @@ end
 history(candidates, totalSold, best.orderId)
 inc_sold(best.orderId, best.daily_tz_offset)
 
-return {best.kind, best.kind == 'irev' and best.partner_id or best.orderId, best.partner_id, tostring(best.rate)}
+local local_day = tostring(resolve_local_day(best.daily_tz_offset))
+local has_daily_limit = '0'
+if best.capacity_str ~= nil and best.capacity_str ~= false and best.capacity_str ~= '' then
+    local limit = tonumber(best.capacity_str)
+    if limit ~= nil and limit > 0 then
+        has_daily_limit = '1'
+    end
+end
+
+return {
+    best.kind,
+    best.kind == 'irev' and best.partner_id or best.orderId,
+    best.partner_id,
+    tostring(best.rate),
+    local_day,
+    has_daily_limit,
+}

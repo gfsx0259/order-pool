@@ -16,9 +16,10 @@ use RuntimeException;
  *
  * Competes LM real orders and IREV virtual orders in the same preset pool.
  *
- * Result kinds (uniform 4-tuple):
- * - ['lm'|'irev', <refId>, <partnerId>, <rate>]
+ * Result kinds (uniform 6-tuple):
+ * - ['lm'|'irev', <refId>, <partnerId>, <rate>, <localDay>, <hasDailyLimit>]
  *   refId = LM order id (numeric string) or IREV partner uuid
+ *   hasDailyLimit = '1' when order has a positive daily capacity, else '0'
  * - null (no eligible)
  * - 'POOL_NOT_FOUND' (missing pool key)
  *
