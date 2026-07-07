@@ -38,7 +38,7 @@ final readonly class DefaultPresetResolver
             [$countryCode],
         )->fetch();
 
-        if ($row === null) {
+        if (!$row) {
             $this->logger->warning('No default preset for country', ['country' => $countryCode]);
 
             return null;
