@@ -44,7 +44,7 @@ final readonly class LmPresetPoolSync
                 o.daily_received_local_day,
                 o.availability_schedule AS order_schedule,
                 u.availability_schedule AS user_schedule,
-                p.price
+                COALESCE(o.price, p.price) AS price
              FROM orders o
              INNER JOIN users u ON u.id = o.partner_id
              INNER JOIN presets p ON p.id = o.preset_id

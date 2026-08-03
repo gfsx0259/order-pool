@@ -191,7 +191,7 @@ if #candidates == 0 or sumWeight <= 0 then
     return nil
 end
 
-local best = nil
+local best
 local bestDeficit = -1e18
 local N = totalSold + 1
 
