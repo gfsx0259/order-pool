@@ -42,6 +42,7 @@ final readonly class LmPresetPoolSync
                 o.daily_limit,
                 o.daily_received_count,
                 o.daily_received_local_day,
+                o.date,
                 o.availability_schedule AS order_schedule,
                 u.availability_schedule AS user_schedule,
                 COALESCE(o.price, p.price) AS price
@@ -54,13 +55,21 @@ final readonly class LmPresetPoolSync
             [$presetId],
         )->fetchAll();
 
+        $synced = 0;
         foreach ($rows as $row) {
-            $this->upsert($this->mapRowToSnapshot($row));
+            $order = $this->mapRowToSnapshot($row);
+            if (!$this->isEligibleForPool($order, $row)) {
+                continue;
+            }
+
+            $this->upsert($order);
+            $synced++;
         }
 
         $this->logger->info('LM preset synced to Redis', [
             'preset_id' => $presetId,
-            'orders' => count($rows),
+            'candidateOrdersCount' => count($rows),
+            'syncedOrdersCount' => $synced,
         ]);
     }
 
@@ -138,6 +147,17 @@ final readonly class LmPresetPoolSync
     /**
      * @param array<string, mixed> $row
      */
+    private function isEligibleForPool(Order $order, array $row): bool
+    {
+        $schedule = AvailabilitySchedule::fromJson($row['order_schedule'])
+            ?? AvailabilitySchedule::fromJson($row['user_schedule']);
+
+        return $this->availabilityNormalizer->isActiveOnDate($order->date, $schedule);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
     private function mapRowToSnapshot(array $row): Order
     {
         $schedule = AvailabilitySchedule::fromJson($row['order_schedule'])
@@ -154,6 +174,7 @@ final readonly class LmPresetPoolSync
             dailyReceivedCount: $row['daily_received_count'] !== null ? (int) $row['daily_received_count'] : null,
             dailyReceivedLocalDay: $row['daily_received_local_day'] !== null ? (int) $row['daily_received_local_day'] : null,
             dailyTzOffset: $availability->dailyTzOffset,
+            date: $row['date'] ?? null,
         );
     }
 }

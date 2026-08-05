@@ -22,6 +22,8 @@ final readonly class Order
         public ?int $dailyReceivedCount = null,
         public ?int $dailyReceivedLocalDay = null,
         public int $dailyTzOffset = 0,
+        /** Y-m-d calendar day, or null for infinity (always eligible while in_progress). */
+        public ?string $date = null,
     ) {}
 
     public static function irevOrderId(int $presetId, string $partnerUuid): string

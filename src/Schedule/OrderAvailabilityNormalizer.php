@@ -19,6 +19,36 @@ final class OrderAvailabilityNormalizer
         return intdiv(($timestamp ?? time()) + $tzOffsetSeconds, 86400);
     }
 
+    /**
+     * Calendar Y-m-d "today" in the schedule timezone (UTC if schedule is null).
+     */
+    public function resolveLocalDate(?AvailabilitySchedule $schedule, ?int $timestamp = null): string
+    {
+        $tzName = $schedule?->timezone ?? 'UTC';
+
+        try {
+            $tz = new DateTimeZone($tzName);
+        } catch (\Exception) {
+            $tz = new DateTimeZone('UTC');
+        }
+
+        return (new DateTimeImmutable('@' . ($timestamp ?? time())))
+            ->setTimezone($tz)
+            ->format('Y-m-d');
+    }
+
+    /**
+     * Infinity (null/empty date) is always eligible; dated orders only on their calendar day in schedule TZ.
+     */
+    public function isActiveOnDate(?string $orderDateYmd, ?AvailabilitySchedule $schedule, ?int $timestamp = null): bool
+    {
+        if ($orderDateYmd === null || $orderDateYmd === '') {
+            return true;
+        }
+
+        return $orderDateYmd === $this->resolveLocalDate($schedule, $timestamp);
+    }
+
     public function fromLm(?AvailabilitySchedule $schedule): NormalizedAvailability
     {
         return new NormalizedAvailability(

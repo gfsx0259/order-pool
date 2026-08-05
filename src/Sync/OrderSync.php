@@ -42,6 +42,7 @@ final readonly class OrderSync
             'availability_utc' => $order->availabilityUtc,
             'capacity' => $order->capacity !== null ? (string) $order->capacity : '',
             'daily_tz_offset' => (string) $order->dailyTzOffset,
+            'date' => $order->date ?? '',
         ];
 
         $this->redis->multi(\Redis::PIPELINE);
