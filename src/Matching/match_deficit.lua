@@ -20,6 +20,12 @@ local function resolve_local_day(tz_offset)
     return math.floor((utc_ts + (tonumber(tz_offset) or 0)) / 86400)
 end
 
+-- Wall-clock Y-m-d for order TZ offset (same instant model as resolve_local_day).
+local function resolve_local_ymd(tz_offset)
+    local local_ts = utc_ts + (tonumber(tz_offset) or 0)
+    return os.date('!%Y-%m-%d', local_ts)
+end
+
 local function order_sold_key(order_id, tz_offset)
     local day = tostring(resolve_local_day(tz_offset))
     if dry_run == 1 then
@@ -126,7 +132,17 @@ local function effective_capacity(capacity_str, sold)
 end
 
 local function try_candidate(orderId)
-    local d = redis.call('HMGET', order_data_key(orderId), 'source', 'rate', 'availability_utc', 'capacity', 'partner_id', 'daily_tz_offset')
+    local d = redis.call(
+        'HMGET',
+        order_data_key(orderId),
+        'source',
+        'rate',
+        'availability_utc',
+        'capacity',
+        'partner_id',
+        'daily_tz_offset',
+        'date'
+    )
 
     local kind = d[1]
     local rate = d[2]
@@ -134,9 +150,18 @@ local function try_candidate(orderId)
     local capacity_str = d[4]
     local partner_id = d[5]
     local daily_tz_offset = d[6]
+    local order_date = d[7]
 
     if kind == false or rate == false or partner_id == false or not is_available(availability_utc) then
         return nil
+    end
+
+    -- Dated LM orders: only match on their calendar day in schedule TZ.
+    -- Empty/missing date = infinity (or IREV) — always eligible by date.
+    if order_date ~= nil and order_date ~= false and order_date ~= '' then
+        if order_date ~= resolve_local_ymd(daily_tz_offset) then
+            return nil
+        end
     end
 
     local sold = get_sold(orderId, daily_tz_offset)
