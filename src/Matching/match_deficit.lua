@@ -20,10 +20,24 @@ local function resolve_local_day(tz_offset)
     return math.floor((utc_ts + (tonumber(tz_offset) or 0)) / 86400)
 end
 
+-- Civil Y-m-d from Unix day index (Howard Hinnant). Redis Lua has no os.date.
+local function ymd_from_epoch_day(z)
+    z = z + 719468
+    local era = math.floor((z >= 0 and z or z - 146096) / 146097)
+    local doe = z - era * 146097
+    local yoe = math.floor((doe - math.floor(doe / 1460) + math.floor(doe / 36524) - math.floor(doe / 146096)) / 365)
+    local y = yoe + era * 400
+    local doy = doe - (365 * yoe + math.floor(yoe / 4) - math.floor(yoe / 100))
+    local mp = math.floor((5 * doy + 2) / 153)
+    local d = doy - math.floor((153 * mp + 2) / 5) + 1
+    local m = mp + (mp < 10 and 3 or -9)
+    y = y + (m <= 2 and 1 or 0)
+    return string.format('%04d-%02d-%02d', y, m, d)
+end
+
 -- Wall-clock Y-m-d for order TZ offset (same instant model as resolve_local_day).
 local function resolve_local_ymd(tz_offset)
-    local local_ts = utc_ts + (tonumber(tz_offset) or 0)
-    return os.date('!%Y-%m-%d', local_ts)
+    return ymd_from_epoch_day(resolve_local_day(tz_offset))
 end
 
 local function order_sold_key(order_id, tz_offset)
