@@ -32,8 +32,8 @@ final class DeficitMatcher
     public function __construct(
         private readonly RedisClientInterface $redis,
         private readonly KeySchema $keys,
-        private readonly float $rateExponent = 1.0,
         private readonly Clock $clock,
+        private readonly float $rateExponent = 1.0,
     ) {}
 
     /**
