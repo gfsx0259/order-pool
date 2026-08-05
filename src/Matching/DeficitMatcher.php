@@ -5,8 +5,7 @@ declare(strict_types=1);
 namespace Enthusiast\OrderPool\Matching;
 
 use DateMalformedStringException;
-use DateTimeImmutable;
-use DateTimeZone;
+use Enthusiast\OrderPool\Clock\Clock;
 use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 use RuntimeException;
@@ -34,6 +33,7 @@ final class DeficitMatcher
         private readonly RedisClientInterface $redis,
         private readonly KeySchema $keys,
         private readonly float $rateExponent = 1.0,
+        private readonly Clock $clock,
     ) {}
 
     /**
@@ -44,7 +44,7 @@ final class DeficitMatcher
         int $presetId,
         bool $dryRun = false,
     ): array|string|null {
-        $utc = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+        $utc = $this->clock->now();
         $utcTs = (int) $utc->format('U');
         // ISO-8601 day of week: 1..7 (Mon..Sun). Must match `availability_utc` format.
         $nowDayOfWeek = (int) $utc->format('N');

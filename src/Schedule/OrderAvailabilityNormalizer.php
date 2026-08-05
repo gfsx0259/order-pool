@@ -6,6 +6,7 @@ namespace Enthusiast\OrderPool\Schedule;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use Enthusiast\OrderPool\Clock\Clock;
 
 /**
  * Schedule ingress + local day index from tz offset (sold counters, daily limits).
@@ -14,9 +15,14 @@ final class OrderAvailabilityNormalizer
 {
     private const string REFERENCE_MONDAY = '2024-01-01';
 
+
+    public function __construct(
+        private readonly Clock $clock,
+    ) {}
+
     public function resolveLocalDay(int $tzOffsetSeconds, ?int $timestamp = null): int
     {
-        return intdiv(($timestamp ?? time()) + $tzOffsetSeconds, 86400);
+        return intdiv(($timestamp ?? $this->clock->now()->getTimestamp()) + $tzOffsetSeconds, 86400);
     }
 
     /**
@@ -32,9 +38,11 @@ final class OrderAvailabilityNormalizer
             $tz = new DateTimeZone('UTC');
         }
 
-        return (new DateTimeImmutable('@' . ($timestamp ?? time())))
-            ->setTimezone($tz)
-            ->format('Y-m-d');
+        $instant = $timestamp !== null
+            ? (new DateTimeImmutable('@' . $timestamp))->setTimezone($tz)
+            : $this->clock->now()->setTimezone($tz);
+
+        return $instant->format('Y-m-d');
     }
 
     /**
@@ -78,7 +86,7 @@ final class OrderAvailabilityNormalizer
 
         $tz = new DateTimeZone($schedule->timezone);
 
-        return $tz->getOffset(new DateTimeImmutable('now', $tz));
+        return $tz->getOffset($this->clock->now()->setTimezone($tz));
     }
 
     /**
@@ -165,7 +173,7 @@ final class OrderAvailabilityNormalizer
             $endUtc += 1440;
         }
 
-        $today = (int) (new DateTimeImmutable('now', new DateTimeZone('UTC')))->format('N');
+        $today = (int) $this->clock->now()->format('N');
 
         if ($startUtc <= $endUtc) {
             return $this->segment($today, $startUtc, $endUtc);
