@@ -11,13 +11,10 @@ use Enthusiast\OrderPool\Clock\Clock;
 /**
  * Schedule ingress + local day index from tz offset (sold counters, daily limits).
  */
-final class OrderAvailabilityNormalizer
+final readonly class OrderAvailabilityNormalizer
 {
-    private const string REFERENCE_MONDAY = '2024-01-01';
-
-
     public function __construct(
-        private readonly Clock $clock,
+        private Clock $clock,
     ) {}
 
     public function resolveLocalDay(int $tzOffsetSeconds, ?int $timestamp = null): int
@@ -115,7 +112,9 @@ final class OrderAvailabilityNormalizer
 
         foreach ($schedule->windows as $window) {
             foreach ($window['days'] as $dayOfWeek) {
-                $referenceDate = $this->referenceDateForDay($dayOfWeek);
+                // Anchor to the current local week (via Clock) so DST/offset
+                // matches "now" — a fixed winter Monday shifts UTC windows by 1h.
+                $referenceDate = $this->referenceDateForDay($dayOfWeek, $timezone);
 
                 $startLocal = new DateTimeImmutable(
                     $referenceDate . ' ' . $window['start'] . ':00',
@@ -189,11 +188,14 @@ final class OrderAvailabilityNormalizer
         return sprintf('%d:%d-%d', $utcDow, $startMin, $endMin);
     }
 
-    private function referenceDateForDay(int $isoDayOfWeek): string
+    private function referenceDateForDay(int $isoDayOfWeek, DateTimeZone $timezone): string
     {
-        $monday = new DateTimeImmutable(self::REFERENCE_MONDAY);
+        $nowLocal = $this->clock->now()->setTimezone($timezone);
+        $delta = $isoDayOfWeek - (int) $nowLocal->format('N');
 
-        return $monday->modify('+' . ($isoDayOfWeek - 1) . ' days')->format('Y-m-d');
+        return $nowLocal
+            ->modify(($delta >= 0 ? '+' : '') . $delta . ' days')
+            ->format('Y-m-d');
     }
 
     private function minutesFromMidnight(DateTimeImmutable $dt): int
