@@ -39,6 +39,8 @@ final readonly class LmPresetPoolSync
                 o.id,
                 o.preset_id,
                 o.partner_id,
+                o.limit_total,
+                o.received_count,
                 o.daily_limit,
                 o.daily_received_count,
                 o.daily_received_local_day,
@@ -85,7 +87,10 @@ final readonly class LmPresetPoolSync
     }
 
     /**
-     * Restore LM `sold` counters for all active orders with daily limits (worker startup).
+     * Restore LM `sold` counters for all active pool orders (worker startup).
+     *
+     * - daily_limit set → seed from daily_received_* for the current local day
+     * - otherwise → seed from lifetime received_count (total-cap WDRR weight)
      */
     public function restoreAllSoldCountersFromDatabase(): void
     {
@@ -93,6 +98,8 @@ final readonly class LmPresetPoolSync
             $rows = $this->db->database()->query(
                 'SELECT
                     o.id,
+                    o.received_count,
+                    o.daily_limit,
                     o.daily_received_count,
                     o.daily_received_local_day,
                     o.availability_schedule AS order_schedule,
@@ -100,7 +107,6 @@ final readonly class LmPresetPoolSync
                  FROM orders o
                  INNER JOIN users u ON u.id = o.partner_id
                  WHERE o.status = \'in_progress\'
-                   AND o.daily_limit IS NOT NULL
                    AND o.received_count < o.limit_total',
             )->fetchAll();
 
@@ -115,13 +121,26 @@ final readonly class LmPresetPoolSync
                 $currentLocalDay = $this->availabilityNormalizer->resolveLocalDay($tzOffset);
                 $soldKey = $this->keys->orderSoldKey($orderId, $currentLocalDay);
 
-                $dbLocalDay = $row['daily_received_local_day'] !== null
-                    ? (int) $row['daily_received_local_day']
-                    : null;
-                $dbCount = (int) $row['daily_received_count'];
+                if ($row['daily_limit'] !== null) {
+                    $dbLocalDay = $row['daily_received_local_day'] !== null
+                        ? (int) $row['daily_received_local_day']
+                        : null;
+                    $dbCount = (int) $row['daily_received_count'];
 
-                if ($dbLocalDay === $currentLocalDay && $dbCount > 0) {
-                    $this->redis->set($soldKey, (string) $dbCount, self::SOLD_COUNTER_TTL_SECONDS);
+                    if ($dbLocalDay === $currentLocalDay && $dbCount > 0) {
+                        $this->redis->set($soldKey, (string) $dbCount, self::SOLD_COUNTER_TTL_SECONDS);
+                        $setCount++;
+                        continue;
+                    }
+
+                    $this->redis->del($soldKey);
+                    $clearedCount++;
+                    continue;
+                }
+
+                $received = (int) $row['received_count'];
+                if ($received > 0) {
+                    $this->redis->set($soldKey, (string) $received, self::SOLD_COUNTER_TTL_SECONDS);
                     $setCount++;
                     continue;
                 }
@@ -164,17 +183,21 @@ final readonly class LmPresetPoolSync
             ?? AvailabilitySchedule::fromJson($row['user_schedule']);
         $availability = $this->availabilityNormalizer->fromLm($schedule);
 
+        $hasDailyLimit = $row['daily_limit'] !== null;
+
         return new Order(
             orderId: (string) $row['id'],
             presetId: (int) $row['preset_id'],
             partnerId: (string) $row['partner_id'],
             rate: (int) $row['price'],
             availabilityUtc: $availability->availabilityUtc,
-            capacity: $row['daily_limit'] !== null ? (int) $row['daily_limit'] : null,
+            capacity: $hasDailyLimit ? (int) $row['daily_limit'] : (int) $row['limit_total'],
             dailyReceivedCount: $row['daily_received_count'] !== null ? (int) $row['daily_received_count'] : null,
             dailyReceivedLocalDay: $row['daily_received_local_day'] !== null ? (int) $row['daily_received_local_day'] : null,
             dailyTzOffset: $availability->dailyTzOffset,
             date: $row['date'] ?? null,
+            hasDailyLimit: $hasDailyLimit,
+            receivedCount: (int) $row['received_count'],
         );
     }
 }

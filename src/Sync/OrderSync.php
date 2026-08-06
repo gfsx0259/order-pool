@@ -41,6 +41,7 @@ final readonly class OrderSync
             'rate' => (string) $order->rate,
             'availability_utc' => $order->availabilityUtc,
             'capacity' => $order->capacity !== null ? (string) $order->capacity : '',
+            'has_daily_limit' => $order->hasDailyLimit ? '1' : '0',
             'daily_tz_offset' => (string) $order->dailyTzOffset,
             'date' => $order->date ?? '',
         ];
@@ -74,16 +75,22 @@ final readonly class OrderSync
         }
 
         $currentLocalDay = $this->availabilityNormalizer->resolveLocalDay($order->dailyTzOffset);
-        if ($order->dailyReceivedLocalDay !== $currentLocalDay) {
-            return;
+        $soldKey = $this->keys->orderSoldKey($order->orderId, $currentLocalDay);
+
+        if ($order->hasDailyLimit) {
+            if ($order->dailyReceivedLocalDay !== $currentLocalDay) {
+                return;
+            }
+            $count = $order->dailyReceivedCount ?? 0;
+        } else {
+            // Total-cap weight: seed today's sold from lifetime received.
+            $count = $order->receivedCount ?? 0;
         }
 
-        $count = $order->dailyReceivedCount ?? 0;
         if ($count <= 0) {
             return;
         }
 
-        $soldKey = $this->keys->orderSoldKey($order->orderId, $currentLocalDay);
         $this->redis->set($soldKey, (string) $count, self::SOLD_COUNTER_TTL_SECONDS);
     }
 }

@@ -166,6 +166,7 @@ final class SimulateMatcherCommand extends Command
             'rate' => (string) $order->rate,
             'availability_utc' => $availability->availabilityUtc,
             'capacity' => (string) $order->capacity,
+            'has_daily_limit' => '1',
             'daily_tz_offset' => (string) $availability->dailyTzOffset,
         ]);
 
