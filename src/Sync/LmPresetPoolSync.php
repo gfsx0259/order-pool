@@ -9,6 +9,7 @@ use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\OrderPool\Schedule\AvailabilitySchedule;
 use Enthusiast\OrderPool\Schedule\OrderAvailabilityNormalizer;
 use Enthusiast\OrderPool\ValueObject\Order;
+use Enthusiast\OrderPool\Enum\PaymentModel;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -34,6 +35,11 @@ final readonly class LmPresetPoolSync
     /** Sync all active LM orders for a preset from DB into Redis. */
     public function syncFromDatabase(int $presetId): void
     {
+        foreach (PaymentModel::cases() as $case) {
+            $this->redis->del($this->keys->presetOrderPoolKey($presetId, $case));
+        }
+        $this->redis->del($this->keys->legacyPresetOrderPoolKey($presetId));
+
         $rows = $this->db->database()->query(
             'SELECT
                 o.id,
@@ -44,6 +50,7 @@ final readonly class LmPresetPoolSync
                 o.daily_limit,
                 o.daily_received_count,
                 o.daily_received_local_day,
+                o.payment_model,
                 o.date,
                 o.availability_schedule AS order_schedule,
                 u.availability_schedule AS user_schedule,
@@ -81,9 +88,9 @@ final readonly class LmPresetPoolSync
         $this->orderSync->restoreSoldCounter($order);
     }
 
-    public function remove(string $orderId, int $presetId): void
+    public function remove(string $orderId, int $presetId, PaymentModel|string $paymentModel = PaymentModel::CPL): void
     {
-        $this->orderSync->remove($orderId, $presetId);
+        $this->orderSync->remove($orderId, $presetId, $paymentModel);
     }
 
     /**
@@ -198,6 +205,7 @@ final readonly class LmPresetPoolSync
             date: $row['date'] ?? null,
             hasDailyLimit: $hasDailyLimit,
             receivedCount: (int) $row['received_count'],
+            paymentModel: PaymentModel::normalize((string) ($row['payment_model'] ?? PaymentModel::CPL->value)),
         );
     }
 }

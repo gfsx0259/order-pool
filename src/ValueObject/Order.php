@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enthusiast\OrderPool\ValueObject;
 
+use Enthusiast\OrderPool\Enum\PaymentModel;
+
 /**
  * Normalized order for Redis pool sync (LM + IREV).
  *
@@ -14,6 +16,8 @@ namespace Enthusiast\OrderPool\ValueObject;
  * - LM with daily_limit → daily_limit (hasDailyLimit=true)
  * - LM without daily_limit (dated / infinity) → limit_total (hasDailyLimit=false)
  * - IREV → snapshot remaining (resetSold on push)
+ *
+ * Pool membership: preset:{presetId}:orders_pool:{cpl|cpa}
  */
 final readonly class Order
 {
@@ -36,6 +40,7 @@ final readonly class Order
         public bool $hasDailyLimit = false,
         /** Lifetime received_count; seeds sold when !hasDailyLimit. */
         public ?int $receivedCount = null,
+        public PaymentModel $paymentModel = PaymentModel::CPL,
     ) {}
 
     public static function irevOrderId(int $presetId, string $partnerUuid): string

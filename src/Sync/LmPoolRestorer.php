@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Enthusiast\OrderPool\Sync;
 
 use Enthusiast\OrderPool\Redis\KeySchema;
+use Enthusiast\OrderPool\Enum\PaymentModel;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 use Psr\Log\LoggerInterface;
 use Throwable;
@@ -27,13 +28,13 @@ final readonly class LmPoolRestorer
         private LoggerInterface $logger,
     ) {}
 
-    public function restore(int $presetId): bool
+    public function restore(int $presetId, PaymentModel|string $paymentModel = PaymentModel::CPL): bool
     {
         $lockKey = $this->keys->presetRestoreLockKey($presetId);
 
         $locked = $this->redis->set($lockKey, '1', ['nx', 'ex' => self::LOCK_TTL_SECONDS]);
         if (!$locked) {
-            return $this->waitForPool($presetId);
+            return $this->waitForPool($presetId, $paymentModel);
         }
 
         try {
@@ -54,9 +55,9 @@ final readonly class LmPoolRestorer
         }
     }
 
-    private function waitForPool(int $presetId): bool
+    private function waitForPool(int $presetId, PaymentModel|string $paymentModel = PaymentModel::CPL): bool
     {
-        $poolKey = $this->keys->presetOrderPoolKey($presetId);
+        $poolKey = $this->keys->presetOrderPoolKey($presetId, $paymentModel);
         $waited = 0;
 
         while ($waited < self::MAX_WAIT_MICROSECONDS) {

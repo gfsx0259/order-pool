@@ -7,13 +7,14 @@ namespace Enthusiast\OrderPool\Sync;
 use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\OrderPool\Schedule\OrderAvailabilityNormalizer;
 use Enthusiast\OrderPool\ValueObject\Order;
+use Enthusiast\OrderPool\Enum\PaymentModel;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 
 /**
  * Writes orders into Redis (LM + IREV share one HASH schema).
  *
  * - order:{id}:data HASH
- * - preset:{id}:orders_pool SET
+ * - preset:{id}:orders_pool:{cpl|cpa} SET
  * - order:{id}:sold:{day} STRING
  */
 final readonly class OrderSync
@@ -32,7 +33,7 @@ final readonly class OrderSync
     public function upsert(Order $order, bool $resetSold = false): void
     {
         $dataKey = $this->keys->orderDataKey($order->orderId);
-        $poolKey = $this->keys->presetOrderPoolKey($order->presetId);
+        $poolKey = $this->keys->presetOrderPoolKey($order->presetId, $order->paymentModel);
 
         $fields = [
             'source' => $order->isIrev() ? 'irev' : 'lm',
@@ -44,6 +45,7 @@ final readonly class OrderSync
             'has_daily_limit' => $order->hasDailyLimit ? '1' : '0',
             'daily_tz_offset' => (string) $order->dailyTzOffset,
             'date' => $order->date ?? '',
+            'payment_model' => $order->paymentModel->value,
         ];
 
         $this->redis->multi(\Redis::PIPELINE);
@@ -57,14 +59,29 @@ final readonly class OrderSync
         }
     }
 
-    public function remove(string $orderId, int $presetId): void
+    public function remove(string $orderId, int $presetId, PaymentModel|string $paymentModel = PaymentModel::CPL): void
     {
+        $model = $paymentModel instanceof PaymentModel
+            ? $paymentModel
+            : PaymentModel::normalize($paymentModel);
+
         $dataKey = $this->keys->orderDataKey($orderId);
-        $poolKey = $this->keys->presetOrderPoolKey($presetId);
+        $poolKey = $this->keys->presetOrderPoolKey($presetId, $model);
 
         $this->redis->multi(\Redis::PIPELINE);
         $this->redis->del($dataKey);
         $this->redis->rawCommand('SREM', $poolKey, $orderId);
+        // Legacy mixed pool + opposite branch (safe during migration).
+        $this->redis->rawCommand('SREM', $this->keys->legacyPresetOrderPoolKey($presetId), $orderId);
+        foreach (PaymentModel::cases() as $case) {
+            if ($case !== $model) {
+                $this->redis->rawCommand(
+                    'SREM',
+                    $this->keys->presetOrderPoolKey($presetId, $case),
+                    $orderId,
+                );
+            }
+        }
         $this->redis->exec();
     }
 

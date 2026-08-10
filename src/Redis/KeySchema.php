@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Enthusiast\OrderPool\Redis;
 
+use Enthusiast\OrderPool\Enum\PaymentModel;
+
 final readonly class KeySchema
 {
     public function __construct(
@@ -15,7 +17,21 @@ final readonly class KeySchema
         return $this->prefix;
     }
 
-    public function presetOrderPoolKey(int $presetId): string
+    public function presetOrderPoolKey(int $presetId, PaymentModel|string $paymentModel = PaymentModel::CPL): string
+    {
+        $model = $paymentModel instanceof PaymentModel
+            ? $paymentModel
+            : PaymentModel::normalize($paymentModel);
+
+        return $this->prefix . sprintf(
+            'preset:%d:orders_pool:%s',
+            $presetId,
+            $model->value,
+        );
+    }
+
+    /** @deprecated Legacy mixed pool before CPL/CPA split. */
+    public function legacyPresetOrderPoolKey(int $presetId): string
     {
         return $this->prefix . sprintf('preset:%d:orders_pool', $presetId);
     }

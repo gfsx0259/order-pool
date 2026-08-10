@@ -17,16 +17,16 @@ final readonly class DefaultPresetResolver
         private LoggerInterface $logger,
     ) {}
 
-    public function resolve(?int $presetId, ?string $countryCode): ?int
+    public function resolve(?int $presetId, ?string $countryCode): ?ResolvedPreset
     {
-        if ($presetId !== null && $presetId > 0) {
-            return $presetId;
+        if ($presetId !== null) {
+            return $this->resolveById($presetId);
         }
 
-        return $this->resolveByCountry($countryCode);
+        return $this->resolveFirstByCountry($countryCode);
     }
 
-    public function resolveByCountry(?string $countryCode): ?int
+    private function resolveFirstByCountry(?string $countryCode): ?ResolvedPreset
     {
         $countryCode = strtoupper(trim((string) $countryCode));
         if ($countryCode === '') {
@@ -34,7 +34,7 @@ final readonly class DefaultPresetResolver
         }
 
         $row = $this->db->database()->query(
-            'SELECT id FROM presets WHERE country_code = ? ORDER BY id ASC LIMIT 1',
+            'SELECT id, prefer_cpl FROM presets WHERE country_code = ? ORDER BY id ASC LIMIT 1',
             [$countryCode],
         )->fetch();
 
@@ -44,6 +44,33 @@ final readonly class DefaultPresetResolver
             return null;
         }
 
-        return (int) $row['id'];
+        return $this->mapRow($row);
+    }
+
+    private function resolveById(int $presetId): ?ResolvedPreset
+    {
+        $row = $this->db->database()->query(
+            'SELECT id, prefer_cpl FROM presets WHERE id = ?',
+            [$presetId],
+        )->fetch();
+
+        if (!$row) {
+            $this->logger->warning('Preset not found', ['preset_id' => $presetId]);
+
+            return null;
+        }
+
+        return $this->mapRow($row);
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function mapRow(array $row): ResolvedPreset
+    {
+        return new ResolvedPreset(
+            id: (int) $row['id'],
+            preferCpl: (bool) ($row['prefer_cpl'] ?? true),
+        );
     }
 }
