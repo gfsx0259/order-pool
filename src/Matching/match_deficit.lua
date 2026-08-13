@@ -156,7 +156,8 @@ local function try_candidate(orderId)
         'partner_id',
         'daily_tz_offset',
         'date',
-        'has_daily_limit'
+        'has_daily_limit',
+        'payment_model'
     )
 
     local kind = d[1]
@@ -167,6 +168,7 @@ local function try_candidate(orderId)
     local daily_tz_offset = d[6]
     local order_date = d[7]
     local has_daily_limit = d[8]
+    local payment_model = d[9]
 
     if kind == false or rate == false or partner_id == false or not is_available(availability_utc) then
         return nil
@@ -199,6 +201,7 @@ local function try_candidate(orderId)
         daily_tz_offset = daily_tz_offset,
         capacity_str = capacity_str,
         has_daily_limit = has_daily_limit,
+        payment_model = payment_model,
         sold = sold,
         cap = cap,
         weight = weight,
@@ -257,6 +260,9 @@ inc_sold(best.orderId, best.daily_tz_offset)
 local local_day = tostring(resolve_local_day(best.daily_tz_offset))
 -- Explicit flag from sync (not inferred from capacity — capacity is also limit_total for dated).
 local has_daily_limit = (best.has_daily_limit == '1') and '1' or '0'
+local payment_model = (best.payment_model ~= nil and best.payment_model ~= false and best.payment_model ~= '')
+    and best.payment_model
+    or 'cpl'
 
 return {
     best.kind,
@@ -265,4 +271,5 @@ return {
     tostring(best.rate),
     local_day,
     has_daily_limit,
+    payment_model,
 }

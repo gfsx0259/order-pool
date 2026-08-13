@@ -16,8 +16,8 @@ use RuntimeException;
  *
  * Competes LM real orders and IREV virtual orders in a preset payment-model pool.
  *
- * Result kinds (uniform 6-tuple):
- * - ['lm'|'irev', <refId>, <partnerId>, <rate>, <localDay>, <hasDailyLimit>]
+ * Result kinds (uniform 7-tuple):
+ * - ['lm'|'irev', <refId>, <partnerId>, <rate>, <localDay>, <hasDailyLimit>, <paymentModel>]
  * - null (no eligible order in tried pools)
  * - 'POOL_NOT_FOUND' (no Redis pool key after primary + fallback)
  *
