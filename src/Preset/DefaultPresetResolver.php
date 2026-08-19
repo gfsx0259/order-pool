@@ -8,7 +8,7 @@ use Cycle\Database\DatabaseProviderInterface;
 use Psr\Log\LoggerInterface;
 
 /**
- * Resolves routing preset: explicit lead preset_id or default preset for country.
+ * Resolves routing preset: explicit lead preset_id or the country_default preset.
  */
 final readonly class DefaultPresetResolver
 {
@@ -23,10 +23,10 @@ final readonly class DefaultPresetResolver
             return $this->resolveById($presetId);
         }
 
-        return $this->resolveFirstByCountry($countryCode);
+        return $this->resolveByCountry($countryCode);
     }
 
-    private function resolveFirstByCountry(?string $countryCode): ?ResolvedPreset
+    private function resolveByCountry(?string $countryCode): ?ResolvedPreset
     {
         $countryCode = strtoupper(trim((string) $countryCode));
         if ($countryCode === '') {
@@ -34,7 +34,10 @@ final readonly class DefaultPresetResolver
         }
 
         $row = $this->db->database()->query(
-            'SELECT id, prefer_cpl FROM presets WHERE country_code = ? ORDER BY id ASC LIMIT 1',
+            'SELECT id, prefer_cpl
+             FROM presets
+             WHERE country_code = ? AND country_default = true
+             LIMIT 1',
             [$countryCode],
         )->fetch();
 
