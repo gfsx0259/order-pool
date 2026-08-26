@@ -9,6 +9,7 @@ use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\OrderPool\Schedule\AvailabilitySchedule;
 use Enthusiast\OrderPool\Schedule\OrderAvailabilityNormalizer;
 use Enthusiast\OrderPool\ValueObject\Order;
+use Enthusiast\OrderPool\ValueObject\OrderSoldSnapshot;
 use Enthusiast\OrderPool\Enum\PaymentModel;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
 use Psr\Log\LoggerInterface;
@@ -102,62 +103,20 @@ final readonly class LmPresetPoolSync
     public function restoreAllSoldCountersFromDatabase(): void
     {
         try {
-            $rows = $this->db->database()->query(
-                'SELECT
-                    o.id,
-                    o.received_count,
-                    o.daily_limit,
-                    o.daily_received_count,
-                    o.daily_received_local_day,
-                    o.availability_schedule AS order_schedule,
-                    u.availability_schedule AS user_schedule
-                 FROM orders o
-                 INNER JOIN users u ON u.id = o.partner_id
-                 WHERE o.status = \'in_progress\'
-                   AND o.received_count < o.limit_total',
-            )->fetchAll();
-
+            $snapshots = $this->loadSoldSnapshots();
             $setCount = 0;
             $clearedCount = 0;
 
-            foreach ($rows as $row) {
-                $orderId = (string) $row['id'];
-                $schedule = AvailabilitySchedule::fromJson($row['order_schedule'])
-                    ?? AvailabilitySchedule::fromJson($row['user_schedule']);
-                $tzOffset = $this->availabilityNormalizer->fromLm($schedule)->dailyTzOffset;
-                $currentLocalDay = $this->availabilityNormalizer->resolveLocalDay($tzOffset);
-                $soldKey = $this->keys->orderSoldKey($orderId, $currentLocalDay);
-
-                if ($row['daily_limit'] !== null) {
-                    $dbLocalDay = $row['daily_received_local_day'] !== null
-                        ? (int) $row['daily_received_local_day']
-                        : null;
-                    $dbCount = (int) $row['daily_received_count'];
-
-                    if ($dbLocalDay === $currentLocalDay && $dbCount > 0) {
-                        $this->redis->set($soldKey, (string) $dbCount, self::SOLD_COUNTER_TTL_SECONDS);
-                        $setCount++;
-                        continue;
-                    }
-
-                    $this->redis->del($soldKey);
-                    $clearedCount++;
-                    continue;
-                }
-
-                $received = (int) $row['received_count'];
-                if ($received > 0) {
-                    $this->redis->set($soldKey, (string) $received, self::SOLD_COUNTER_TTL_SECONDS);
+            foreach ($snapshots as $snapshot) {
+                if ($this->writeSoldCounter($snapshot)) {
                     $setCount++;
-                    continue;
+                } else {
+                    $clearedCount++;
                 }
-
-                $this->redis->del($soldKey);
-                $clearedCount++;
             }
 
             $this->logger->info('LM sold counters synced from database', [
-                'orders' => count($rows),
+                'orders' => count($snapshots),
                 'set' => $setCount,
                 'cleared' => $clearedCount,
             ]);
@@ -168,6 +127,96 @@ final readonly class LmPresetPoolSync
 
             throw $e;
         }
+    }
+
+    /**
+     * One active LM order, or null if it is no longer in the pool
+     * (`in_progress` and `received_count < limit_total`).
+     */
+    public function fetchSoldSnapshot(int $orderId): ?OrderSoldSnapshot
+    {
+        return $this->loadSoldSnapshots($orderId)[0] ?? null;
+    }
+
+    /**
+     * Write `order:{id}:sold:{day}` from the snapshot (+ matcher pending not yet flushed).
+     *
+     * @return bool true if the key was SET, false if it was deleted
+     */
+    public function writeSoldCounter(
+        OrderSoldSnapshot $snapshot,
+        int $pendingReceived = 0,
+        int $pendingDaily = 0,
+        ?int $pendingDailyLocalDay = null,
+    ): bool {
+        $sold = $snapshot->redisSoldCount($pendingReceived, $pendingDaily, $pendingDailyLocalDay);
+        $soldKey = $this->keys->orderSoldKey((string) $snapshot->orderId, $snapshot->currentLocalDay);
+
+        if ($sold <= 0) {
+            $this->redis->del($soldKey);
+
+            return false;
+        }
+
+        $this->redis->set($soldKey, (string) $sold, self::SOLD_COUNTER_TTL_SECONDS);
+
+        return true;
+    }
+
+    /**
+     * @return list<OrderSoldSnapshot>
+     */
+    private function loadSoldSnapshots(?int $orderId = null): array
+    {
+        $sql = 'SELECT
+                    o.id,
+                    o.limit_total,
+                    o.received_count,
+                    o.daily_limit,
+                    o.daily_received_count,
+                    o.daily_received_local_day,
+                    o.availability_schedule AS order_schedule,
+                    u.availability_schedule AS user_schedule
+                 FROM orders o
+                 INNER JOIN users u ON u.id = o.partner_id
+                 WHERE o.status = \'in_progress\'
+                   AND o.received_count < o.limit_total';
+        $params = [];
+
+        if ($orderId !== null) {
+            $sql .= ' AND o.id = ?';
+            $params[] = $orderId;
+        }
+
+        $rows = $this->db->database()->query($sql, $params)->fetchAll();
+
+        $snapshots = [];
+        foreach ($rows as $row) {
+            $snapshots[] = $this->mapRowToSoldSnapshot($row);
+        }
+
+        return $snapshots;
+    }
+
+    /**
+     * @param array<string, mixed> $row
+     */
+    private function mapRowToSoldSnapshot(array $row): OrderSoldSnapshot
+    {
+        $schedule = AvailabilitySchedule::fromJson($row['order_schedule'])
+            ?? AvailabilitySchedule::fromJson($row['user_schedule']);
+        $tzOffset = $this->availabilityNormalizer->fromLm($schedule)->dailyTzOffset;
+
+        return new OrderSoldSnapshot(
+            orderId: (int) $row['id'],
+            limitTotal: (int) $row['limit_total'],
+            receivedCount: (int) $row['received_count'],
+            dailyLimit: $row['daily_limit'] !== null ? (int) $row['daily_limit'] : null,
+            dailyReceivedCount: $row['daily_received_count'] !== null ? (int) $row['daily_received_count'] : null,
+            dailyReceivedLocalDay: $row['daily_received_local_day'] !== null ? (int) $row['daily_received_local_day'] : null,
+            currentLocalDay: $this->availabilityNormalizer->resolveLocalDay($tzOffset),
+            hasDailyLimit: $row['daily_limit'] !== null,
+        );
     }
 
     /**

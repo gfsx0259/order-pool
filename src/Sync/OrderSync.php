@@ -96,6 +96,8 @@ final readonly class OrderSync
 
         if ($order->hasDailyLimit) {
             if ($order->dailyReceivedLocalDay !== $currentLocalDay) {
+                $this->redis->del($soldKey);
+
                 return;
             }
             $count = $order->dailyReceivedCount ?? 0;
@@ -105,6 +107,8 @@ final readonly class OrderSync
         }
 
         if ($count <= 0) {
+            $this->redis->del($soldKey);
+
             return;
         }
 
