@@ -139,6 +139,60 @@ final readonly class LmPresetPoolSync
     }
 
     /**
+     * Return a reserved slot after a failed delivery (worker-integration).
+     *
+     * Always decrements `received_count`. Decrements `daily_received_count`
+     * only when `daily_limit` is set and the stored local day is still today.
+     * Then reseeds Redis `sold` so Lua can pick the order again without a matcher restart.
+     */
+    public function releaseReservation(int $orderId, int $count = 1): bool
+    {
+        $count = max(1, $count);
+        $snapshot = $this->loadSoldSnapshots($orderId, requireRemaining: false)[0] ?? null;
+        if ($snapshot === null) {
+            return false;
+        }
+
+        $this->db->database()->execute(
+            'UPDATE orders SET
+                received_count = GREATEST(received_count - ?, 0),
+                daily_received_count = CASE
+                    WHEN daily_limit IS NOT NULL AND daily_received_local_day = ?
+                    THEN GREATEST(daily_received_count - ?, 0)
+                    ELSE daily_received_count
+                END
+             WHERE id = ?',
+            [$count, $snapshot->currentLocalDay, $count, $orderId],
+        );
+
+        $releasedDaily = $snapshot->hasDailyLimit
+            && $snapshot->dailyReceivedLocalDay === $snapshot->currentLocalDay;
+
+        $updated = new OrderSoldSnapshot(
+            orderId: $snapshot->orderId,
+            limitTotal: $snapshot->limitTotal,
+            receivedCount: max(0, $snapshot->receivedCount - $count),
+            dailyLimit: $snapshot->dailyLimit,
+            dailyReceivedCount: $releasedDaily
+                ? max(0, ($snapshot->dailyReceivedCount ?? 0) - $count)
+                : $snapshot->dailyReceivedCount,
+            dailyReceivedLocalDay: $snapshot->dailyReceivedLocalDay,
+            currentLocalDay: $snapshot->currentLocalDay,
+            hasDailyLimit: $snapshot->hasDailyLimit,
+        );
+
+        $this->writeSoldCounter($updated);
+
+        $this->logger->info('LM reservation released', [
+            'order_id' => $orderId,
+            'count' => $count,
+            'released_daily' => $releasedDaily,
+        ]);
+
+        return true;
+    }
+
+    /**
      * Write `order:{id}:sold:{day}` from the snapshot (+ matcher pending not yet flushed).
      *
      * @return bool true if the key was SET, false if it was deleted
@@ -166,7 +220,7 @@ final readonly class LmPresetPoolSync
     /**
      * @return list<OrderSoldSnapshot>
      */
-    private function loadSoldSnapshots(?int $orderId = null): array
+    private function loadSoldSnapshots(?int $orderId = null, bool $requireRemaining = true): array
     {
         $sql = 'SELECT
                     o.id,
@@ -179,9 +233,12 @@ final readonly class LmPresetPoolSync
                     u.availability_schedule AS user_schedule
                  FROM orders o
                  INNER JOIN users u ON u.id = o.partner_id
-                 WHERE o.status = \'in_progress\'
-                   AND o.received_count < o.limit_total';
+                 WHERE o.status = \'in_progress\'';
         $params = [];
+
+        if ($requireRemaining) {
+            $sql .= ' AND o.received_count < o.limit_total';
+        }
 
         if ($orderId !== null) {
             $sql .= ' AND o.id = ?';
