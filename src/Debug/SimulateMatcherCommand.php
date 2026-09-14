@@ -6,6 +6,7 @@ namespace Enthusiast\OrderPool\Debug;
 
 use DateTimeImmutable;
 use DateTimeZone;
+use Enthusiast\OrderPool\Clock\Clock;
 use Enthusiast\OrderPool\Matching\DeficitMatcher;
 use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\OrderPool\Schedule\OrderAvailabilityNormalizer;
@@ -29,6 +30,7 @@ final class SimulateMatcherCommand extends Command
     public function __construct(
         private readonly RedisClientInterface $redis,
         private readonly OrderAvailabilityNormalizer $availabilityNormalizer,
+        private readonly Clock $clock,
     ) {
         parent::__construct();
     }
@@ -55,7 +57,7 @@ final class SimulateMatcherCommand extends Command
         $keys = new KeySchema($scenario->prefix);
         $this->resetPool($keys, $scenario);
 
-        $matcher = new DeficitMatcher($this->redis, $keys, rateExponent: $scenario->rateExponent);
+        $matcher = new DeficitMatcher($this->redis, $keys, $this->clock, $scenario->rateExponent);
         $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
         $utcTs = (int) $now->format('U');
 
@@ -64,7 +66,10 @@ final class SimulateMatcherCommand extends Command
         foreach ($scenario->orders as $order) {
             $orderLabels[$order->id] = $order->displayLabel();
             if ($order->source === 'irev') {
-                $expectedId = Order::irevOrderId($scenario->presetId, $order->partnerId);
+                $expectedId = Order::irevOrderId(
+                    $scenario->presetId,
+                    $order->nodeUuid !== '' ? $order->nodeUuid : $order->partnerId,
+                );
                 if ($order->id !== $expectedId) {
                     throw new \InvalidArgumentException(
                         "IREV order id must be $expectedId, got $order->id",
@@ -76,12 +81,14 @@ final class SimulateMatcherCommand extends Command
         $rows = [];
         $winnerCounts = [];
         $stockCount = 0;
+        $soldBefore = $this->fetchSoldSnapshot($keys, $scenario->orders, $utcTs);
 
         for ($lead = 1; $lead <= $scenario->leads; $lead++) {
             $result = $matcher->match($scenario->presetId, dryRun: true);
 
             $historyLine = $this->fetchLastHistoryLine($keys->presetHistoryKey($scenario->presetId));
-            $sold = $this->fetchSoldSnapshot($keys, $scenario->orders, $utcTs);
+            $soldById = $this->fetchSoldSnapshot($keys, $scenario->orders, $utcTs);
+            $sold = $this->labelSold($soldById, $orderLabels);
 
             if ($result === null) {
                 $winnerCounts['STOCK'] = ($winnerCounts['STOCK'] ?? 0) + 1;
@@ -100,8 +107,9 @@ final class SimulateMatcherCommand extends Command
                 throw new \RuntimeException("Unexpected match result: {$result}");
             }
 
-            [$kind, $refId, $partnerId] = array_pad($result, 3, null);
-            $winnerKey = $this->resolveWinnerKey($kind, $refId, $partnerId, $scenario->orders, $scenario->presetId);
+            [$kind, $refId] = array_pad($result, 2, null);
+            $winnerKey = $this->soldWinner($soldBefore, $soldById) ?? (string) $refId;
+            $soldBefore = $soldById;
             $winnerLabel = $orderLabels[$winnerKey] ?? (string) $refId;
             $winnerCounts[$winnerLabel] = ($winnerCounts[$winnerLabel] ?? 0) + 1;
 
@@ -178,7 +186,7 @@ final class SimulateMatcherCommand extends Command
     /**
      * @param list<SimulateOrder> $orders
      *
-     * @return array<string, int>
+     * @return array<string, int> order id => sold today
      */
     private function fetchSoldSnapshot(KeySchema $keys, array $orders, int $utcTs): array
     {
@@ -186,10 +194,41 @@ final class SimulateMatcherCommand extends Command
         foreach ($orders as $order) {
             $localDay = $this->availabilityNormalizer->resolveLocalDay($order->dailyTzOffset, $utcTs);
             $value = $this->redis->rawCommand('GET', $keys->orderSoldDryKey($order->id, $localDay));
-            $sold[$order->displayLabel()] = is_string($value) || is_int($value) ? (int) $value : 0;
+            $sold[$order->id] = is_string($value) || is_int($value) ? (int) $value : 0;
         }
 
         return $sold;
+    }
+
+    /**
+     * @param array<string, int> $soldById
+     * @param array<string, string> $labels
+     *
+     * @return array<string, int>
+     */
+    private function labelSold(array $soldById, array $labels): array
+    {
+        $sold = [];
+        foreach ($soldById as $orderId => $count) {
+            $sold[$labels[$orderId] ?? $orderId] = $count;
+        }
+
+        return $sold;
+    }
+
+    /**
+     * @param array<string, int> $before
+     * @param array<string, int> $after
+     */
+    private function soldWinner(array $before, array $after): ?string
+    {
+        foreach ($after as $orderId => $count) {
+            if ($count > ($before[$orderId] ?? 0)) {
+                return $orderId;
+            }
+        }
+
+        return null;
     }
 
     private function fetchLastHistoryLine(string $historyKey): string
@@ -197,24 +236,6 @@ final class SimulateMatcherCommand extends Command
         $res = $this->redis->rawCommand('LINDEX', $historyKey, -1);
 
         return is_string($res) ? $res : '';
-    }
-
-    /**
-     * @param list<SimulateOrder> $orders
-     */
-    private function resolveWinnerKey(mixed $kind, mixed $refId, mixed $partnerId, array $orders, int $presetId): string
-    {
-        if ($kind === 'lm') {
-            return (string) $refId;
-        }
-
-        foreach ($orders as $order) {
-            if ($order->partnerId === $partnerId) {
-                return $order->id;
-            }
-        }
-
-        return Order::irevOrderId($presetId, (string) $partnerId);
     }
 
     /**

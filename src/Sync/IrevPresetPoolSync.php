@@ -20,36 +20,38 @@ final readonly class IrevPresetPoolSync
 
     public function apply(Preset $preset): void
     {
-        /** @var list<array{0: string, 1: string}> $existing */
-        $existing = [];
+        /** @var array<string, list<string>> $pools orderId => pool keys it currently sits in */
+        $pools = [];
         foreach (PaymentModel::cases() as $paymentModel) {
             $poolKey = $this->keys->presetOrderPoolKey($preset->presetId, $paymentModel);
             foreach ($this->redis->sMembers($poolKey) as $orderId) {
                 if (str_starts_with((string) $orderId, 'irev:')) {
-                    $existing[] = [$poolKey, (string) $orderId];
+                    $pools[(string) $orderId][] = $poolKey;
                 }
             }
         }
 
-        /** @var array<string, string> $upserted orderId => pool key */
-        $upserted = [];
         foreach ($preset->orders as $order) {
             if ($order->partnerId === '') {
                 continue;
             }
 
+            $poolKey = $this->keys->presetOrderPoolKey($preset->presetId, $order->paymentModel);
+            foreach ($pools[$order->orderId] ?? [] as $currentPool) {
+                if ($currentPool !== $poolKey) {
+                    $this->redis->rawCommand('SREM', $currentPool, $order->orderId);
+                }
+            }
+            unset($pools[$order->orderId]);
+
             $this->orderSync->upsert($order, resetSold: true);
-            $upserted[$order->orderId] = $this->keys->presetOrderPoolKey($preset->presetId, $order->paymentModel);
         }
 
-        foreach ($existing as [$poolKey, $orderId]) {
-            if (($upserted[$orderId] ?? null) === $poolKey) {
-                continue;
+        foreach ($pools as $orderId => $poolKeys) {
+            foreach ($poolKeys as $poolKey) {
+                $this->redis->rawCommand('SREM', $poolKey, $orderId);
             }
-            $this->redis->rawCommand('SREM', $poolKey, $orderId);
-            if (!isset($upserted[$orderId])) {
-                $this->redis->del($this->keys->orderDataKey($orderId));
-            }
+            $this->redis->del($this->keys->orderDataKey($orderId));
         }
     }
 }

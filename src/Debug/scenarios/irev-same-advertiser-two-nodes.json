@@ -1,0 +1,32 @@
+{
+  "name": "IREV one advertiser, two rotation nodes (200$ cap 20, 300$ cap 20)",
+  "preset_id": 1,
+  "leads": 100,
+  "rate_exponent": 1.05,
+  "prefix": "dbg:",
+  "output": "irev-same-advertiser-two-nodes-report.html",
+  "orders": [
+    {
+      "id": "irev:1:aaaaaaaa-0001-4000-8000-000000000001",
+      "source": "irev",
+      "partner_id": "11111111-1111-1111-1111-111111111111",
+      "node_uuid": "aaaaaaaa-0001-4000-8000-000000000001",
+      "label": "NODE1",
+      "rate": 200,
+      "capacity": 20,
+      "schedule": "",
+      "schedule_tz": "+0000"
+    },
+    {
+      "id": "irev:1:aaaaaaaa-0002-4000-8000-000000000002",
+      "source": "irev",
+      "partner_id": "11111111-1111-1111-1111-111111111111",
+      "node_uuid": "aaaaaaaa-0002-4000-8000-000000000002",
+      "label": "NODE2",
+      "rate": 300,
+      "capacity": 20,
+      "schedule": "",
+      "schedule_tz": "+0000"
+    }
+  ]
+}
