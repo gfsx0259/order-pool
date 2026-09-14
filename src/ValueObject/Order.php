@@ -10,7 +10,8 @@ use Enthusiast\OrderPool\Enum\PaymentModel;
  * Normalized order for Redis pool sync (LM + IREV).
  *
  * Ingress must set availabilityUtc + dailyTzOffset.
- * orderId: numeric string for LM ("42"), "irev:{presetId}:{partnerUuid}" for IREV.
+ * orderId: numeric string for LM ("42"), "irev:{presetId}:{nodeUuid}" for IREV, where nodeUuid
+ * is the rotation tree entry: one advertiser may hold several entries per country (CPL and CPA).
  *
  * `capacity` is the WDRR ceiling (remaining weight = capacity − sold):
  * - LM with daily_limit → daily_limit (hasDailyLimit=true)
@@ -43,9 +44,9 @@ final readonly class Order
         public PaymentModel $paymentModel = PaymentModel::CPL,
     ) {}
 
-    public static function irevOrderId(int $presetId, string $partnerUuid): string
+    public static function irevOrderId(int $presetId, string $nodeUuid): string
     {
-        return sprintf('irev:%d:%s', $presetId, $partnerUuid);
+        return sprintf('irev:%d:%s', $presetId, $nodeUuid);
     }
 
     public function isIrev(): bool

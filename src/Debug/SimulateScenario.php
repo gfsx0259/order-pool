@@ -41,6 +41,7 @@ final readonly class SimulateScenario
                 id: (string) ($row['id'] ?? ''),
                 source: (string) ($row['source'] ?? 'irev'),
                 partnerId: (string) ($row['partner_id'] ?? ''),
+                nodeUuid: (string) ($row['node_uuid'] ?? ''),
                 rate: (int) ($row['rate'] ?? 0),
                 capacity: (int) ($row['capacity'] ?? 0),
                 label: (string) ($row['label'] ?? $row['partner_name'] ?? ''),
@@ -106,6 +107,7 @@ final readonly class SimulateOrder
         public string $id,
         public string $source,
         public string $partnerId,
+        public string $nodeUuid,
         public int $rate,
         public int $capacity,
         public string $label = '',
@@ -121,7 +123,7 @@ final readonly class SimulateOrder
         }
 
         if ($this->source === 'irev') {
-            $tail = substr($this->partnerId, -5);
+            $tail = substr($this->nodeUuid !== '' ? $this->nodeUuid : $this->partnerId, -5);
 
             return 'IREV:' . $tail;
         }
