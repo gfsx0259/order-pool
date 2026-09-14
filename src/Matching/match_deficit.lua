@@ -6,6 +6,7 @@ local daily_ttl = tonumber(ARGV[4])
 local alpha = tonumber(ARGV[5])
 local key_prefix = ARGV[6] or ''
 local dry_run = tonumber(ARGV[7]) or 0
+local force_partner_id = ARGV[8] or ''
 local preset_id = string.match(pool_key, 'preset:(%d+):orders_pool') or ''
 local history_key = key_prefix .. 'preset:' .. preset_id .. ':history'
 
@@ -171,6 +172,10 @@ local function try_candidate(orderId)
     local payment_model = d[9]
 
     if kind == false or rate == false or partner_id == false or not is_available(availability_utc) then
+        return nil
+    end
+
+    if force_partner_id ~= '' and tostring(partner_id) ~= force_partner_id then
         return nil
     end
 

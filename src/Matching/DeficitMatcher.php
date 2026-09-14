@@ -40,6 +40,7 @@ final class DeficitMatcher
      *
      * Default flow: try primary pool (from $preferCpl), then fallback to the other.
      * When $forcePaymentModel is set (inject / resend), only that pool is used.
+     * When $forcePartnerId is set, Lua keeps only orders of that partner.
      *
      * @return array<int, string>|null|string
      * @throws DateMalformedStringException
@@ -49,22 +50,23 @@ final class DeficitMatcher
         bool $dryRun = false,
         bool $preferCpl = true,
         ?PaymentModel $forcePaymentModel = null,
+        ?string $forcePartnerId = null,
     ): array|string|null {
         if ($forcePaymentModel !== null) {
-            return $this->matchForPaymentModel($presetId, $dryRun, $forcePaymentModel);
+            return $this->matchForPaymentModel($presetId, $dryRun, $forcePaymentModel, $forcePartnerId);
         }
 
         [$primary, $secondary] = $preferCpl
             ? [PaymentModel::CPL, PaymentModel::CPA]
             : [PaymentModel::CPA, PaymentModel::CPL];
 
-        $primaryResult = $this->matchForPaymentModel($presetId, $dryRun, $primary);
+        $primaryResult = $this->matchForPaymentModel($presetId, $dryRun, $primary, $forcePartnerId);
 
         if (is_array($primaryResult)) {
             return $primaryResult;
         }
 
-        $secondaryResult = $this->matchForPaymentModel($presetId, $dryRun, $secondary);
+        $secondaryResult = $this->matchForPaymentModel($presetId, $dryRun, $secondary, $forcePartnerId);
 
         if (is_array($secondaryResult)) {
             return $secondaryResult;
@@ -85,6 +87,7 @@ final class DeficitMatcher
         int $presetId,
         bool $dryRun,
         PaymentModel $paymentModel,
+        ?string $forcePartnerId = null,
     ): array|string|null {
         $utc = $this->clock->now();
         $utcTs = (int) $utc->format('U');
@@ -103,6 +106,7 @@ final class DeficitMatcher
                 (string) $this->rateExponent,
                 $this->keys->prefix(),
                 $dryRun ? '1' : '0',
+                $forcePartnerId ?? '',
             ],
             1,
         );
