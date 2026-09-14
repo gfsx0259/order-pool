@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Enthusiast\OrderPool\Sync;
 
+use Enthusiast\OrderPool\Enum\PaymentModel;
 use Enthusiast\OrderPool\Redis\KeySchema;
 use Enthusiast\OrderPool\ValueObject\Preset;
 use Enthusiast\WorkerTemplate\RedisClientInterface;
@@ -19,28 +20,36 @@ final readonly class IrevPresetPoolSync
 
     public function apply(Preset $preset): void
     {
-        $poolKey = $this->keys->presetOrderPoolKey($preset->presetId);
+        /** @var list<array{0: string, 1: string}> $existing */
+        $existing = [];
+        foreach (PaymentModel::cases() as $paymentModel) {
+            $poolKey = $this->keys->presetOrderPoolKey($preset->presetId, $paymentModel);
+            foreach ($this->redis->sMembers($poolKey) as $orderId) {
+                if (str_starts_with((string) $orderId, 'irev:')) {
+                    $existing[] = [$poolKey, (string) $orderId];
+                }
+            }
+        }
 
-        /** @var list<string> $existing */
-        $existing = $this->redis->sMembers($poolKey);
-
-        $existingSet = array_fill_keys($existing, true);
-
+        /** @var array<string, string> $upserted orderId => pool key */
+        $upserted = [];
         foreach ($preset->orders as $order) {
             if ($order->partnerId === '') {
                 continue;
             }
 
             $this->orderSync->upsert($order, resetSold: true);
-            unset($existingSet[$order->orderId]);
+            $upserted[$order->orderId] = $this->keys->presetOrderPoolKey($preset->presetId, $order->paymentModel);
         }
 
-        foreach (array_keys($existingSet) as $staleOrderId) {
-            if (!str_starts_with((string) $staleOrderId, 'irev:')) {
+        foreach ($existing as [$poolKey, $orderId]) {
+            if (($upserted[$orderId] ?? null) === $poolKey) {
                 continue;
             }
-            $this->redis->rawCommand('SREM', $poolKey, $staleOrderId);
-            $this->redis->del($this->keys->orderDataKey($staleOrderId));
+            $this->redis->rawCommand('SREM', $poolKey, $orderId);
+            if (!isset($upserted[$orderId])) {
+                $this->redis->del($this->keys->orderDataKey($orderId));
+            }
         }
     }
 }
