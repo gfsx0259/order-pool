@@ -7,6 +7,11 @@ local alpha = tonumber(ARGV[5])
 local key_prefix = ARGV[6] or ''
 local dry_run = tonumber(ARGV[7]) or 0
 local force_partner_id = ARGV[8] or ''
+local pool_model = string.match(pool_key, 'orders_pool:(%a+)$') or ''
+local excluded_connections = {}
+for pair in string.gmatch(ARGV[9] or '', '[^,]+') do
+    excluded_connections[pair] = true
+end
 local preset_id = string.match(pool_key, 'preset:(%d+):orders_pool') or ''
 local history_key = key_prefix .. 'preset:' .. preset_id .. ':history'
 
@@ -176,6 +181,10 @@ local function try_candidate(orderId)
     end
 
     if force_partner_id ~= '' and tostring(partner_id) ~= force_partner_id then
+        return nil
+    end
+
+    if kind ~= 'irev' and excluded_connections[tostring(partner_id) .. ':' .. pool_model] then
         return nil
     end
 

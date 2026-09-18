@@ -41,7 +41,10 @@ final class DeficitMatcher
      * Default flow: try primary pool (from $preferCpl), then fallback to the other.
      * When $forcePaymentModel is set (inject / resend), only that pool is used.
      * When $forcePartnerId is set, Lua keeps only orders of that partner.
+     * LM orders of $excludedConnections are skipped (resale after a refusal).
+     * A connection is "partnerId:paymentModel", one per partner and model.
      *
+     * @param list<string> $excludedConnections
      * @return array<int, string>|null|string
      * @throws DateMalformedStringException
      */
@@ -51,22 +54,23 @@ final class DeficitMatcher
         bool $preferCpl = true,
         ?PaymentModel $forcePaymentModel = null,
         ?string $forcePartnerId = null,
+        array $excludedConnections = [],
     ): array|string|null {
         if ($forcePaymentModel !== null) {
-            return $this->matchForPaymentModel($presetId, $dryRun, $forcePaymentModel, $forcePartnerId);
+            return $this->matchForPaymentModel($presetId, $dryRun, $forcePaymentModel, $forcePartnerId, $excludedConnections);
         }
 
         [$primary, $secondary] = $preferCpl
             ? [PaymentModel::CPL, PaymentModel::CPA]
             : [PaymentModel::CPA, PaymentModel::CPL];
 
-        $primaryResult = $this->matchForPaymentModel($presetId, $dryRun, $primary, $forcePartnerId);
+        $primaryResult = $this->matchForPaymentModel($presetId, $dryRun, $primary, $forcePartnerId, $excludedConnections);
 
         if (is_array($primaryResult)) {
             return $primaryResult;
         }
 
-        $secondaryResult = $this->matchForPaymentModel($presetId, $dryRun, $secondary, $forcePartnerId);
+        $secondaryResult = $this->matchForPaymentModel($presetId, $dryRun, $secondary, $forcePartnerId, $excludedConnections);
 
         if (is_array($secondaryResult)) {
             return $secondaryResult;
@@ -80,6 +84,7 @@ final class DeficitMatcher
     }
 
     /**
+     * @param list<string> $excludedConnections
      * @return array<int, string>|null|string
      * @throws DateMalformedStringException
      */
@@ -88,6 +93,7 @@ final class DeficitMatcher
         bool $dryRun,
         PaymentModel $paymentModel,
         ?string $forcePartnerId = null,
+        array $excludedConnections = [],
     ): array|string|null {
         $utc = $this->clock->now();
         $utcTs = (int) $utc->format('U');
@@ -107,6 +113,7 @@ final class DeficitMatcher
                 $this->keys->prefix(),
                 $dryRun ? '1' : '0',
                 $forcePartnerId ?? '',
+                implode(',', $excludedConnections),
             ],
             1,
         );
