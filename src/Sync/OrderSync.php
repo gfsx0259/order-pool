@@ -27,10 +27,7 @@ final readonly class OrderSync
         private OrderAvailabilityNormalizer $availabilityNormalizer,
     ) {}
 
-    /**
-     * @param bool $resetSold IREV snapshot: remaining is authoritative, clear local sold.
-     */
-    public function upsert(Order $order, bool $resetSold = false): void
+    public function upsert(Order $order): void
     {
         $dataKey = $this->keys->orderDataKey($order->orderId);
         $poolKey = $this->keys->presetOrderPoolKey($order->presetId, $order->paymentModel);
@@ -52,11 +49,6 @@ final readonly class OrderSync
         $this->redis->hMSet($dataKey, $fields);
         $this->redis->rawCommand('SADD', $poolKey, $order->orderId);
         $this->redis->exec();
-
-        if ($resetSold) {
-            $localDay = $this->availabilityNormalizer->resolveLocalDay($order->dailyTzOffset);
-            $this->redis->del($this->keys->orderSoldKey($order->orderId, $localDay));
-        }
     }
 
     public function remove(string $orderId, int $presetId, PaymentModel|string $paymentModel = PaymentModel::CPL): void

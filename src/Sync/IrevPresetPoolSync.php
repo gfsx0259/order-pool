@@ -44,7 +44,8 @@ final readonly class IrevPresetPoolSync
             }
             unset($pools[$order->orderId]);
 
-            $this->orderSync->upsert($order, resetSold: true);
+            $this->orderSync->upsert($order);
+            $this->orderSync->restoreSoldCounter($order);
         }
 
         foreach ($pools as $orderId => $poolKeys) {
