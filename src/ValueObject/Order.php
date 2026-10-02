@@ -16,7 +16,7 @@ use Enthusiast\OrderPool\Enum\PaymentModel;
  * `capacity` is the WDRR ceiling (remaining weight = capacity − sold):
  * - LM with daily_limit → daily_limit (hasDailyLimit=true)
  * - LM without daily_limit (dated / infinity) → limit_total (hasDailyLimit=false)
- * - IREV → snapshot remaining (resetSold on push)
+ * - IREV → snapshot cap, today's sold seeded from the snapshot (receivedCount)
  *
  * Pool membership: preset:{presetId}:orders_pool:{cpl|cpa}
  */
