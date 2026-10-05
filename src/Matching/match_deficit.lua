@@ -14,6 +14,14 @@ for pair in string.gmatch(ARGV[9] or '', '[^,]+') do
 end
 local preset_id = string.match(pool_key, 'preset:(%d+):orders_pool') or ''
 local history_key = key_prefix .. 'preset:' .. preset_id .. ':history'
+-- Ephemeral exclusive platform (e.g. "lm"); empty = no filter. Set by API with TTL.
+local force_platform = ''
+if preset_id ~= '' then
+    local fp = redis.call('GET', key_prefix .. 'preset:' .. preset_id .. ':force_platform')
+    if fp ~= false and fp ~= nil then
+        force_platform = tostring(fp)
+    end
+end
 
 local UNLIMITED = 1000000000
 local HISTORY_MAX = 500
@@ -185,6 +193,10 @@ local function try_candidate(orderId)
     end
 
     if kind ~= 'irev' and excluded_connections[tostring(partner_id) .. ':' .. pool_model] then
+        return nil
+    end
+
+    if force_platform ~= '' and tostring(kind) ~= force_platform then
         return nil
     end
 

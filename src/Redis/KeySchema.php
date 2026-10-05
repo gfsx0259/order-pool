@@ -47,6 +47,15 @@ final readonly class KeySchema
         return $this->prefix . sprintf('preset:%d:history', $presetId);
     }
 
+    /**
+     * Ephemeral exclusive platform filter for DWRR (value e.g. "lm", key TTL).
+     * Read by match_deficit.lua — not passed via ARGV.
+     */
+    public function presetForcePlatformKey(int $presetId): string
+    {
+        return $this->prefix . sprintf('preset:%d:force_platform', $presetId);
+    }
+
     public function orderDataKey(string $orderId): string
     {
         return $this->prefix . sprintf('order:%s:data', $orderId);
