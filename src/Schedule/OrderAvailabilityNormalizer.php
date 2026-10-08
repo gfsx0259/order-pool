@@ -39,11 +39,26 @@ final readonly class OrderAvailabilityNormalizer
             ? (new DateTimeImmutable('@' . $timestamp))->setTimezone($tz)
             : $this->clock->now()->setTimezone($tz);
 
-        return $instant->format('Y-m-d');
+        return $instant->modify(sprintf('-%d minutes', $this->dayStartMinutes($schedule)))->format('Y-m-d');
+    }
+
+    public function dayStartMinutes(?AvailabilitySchedule $schedule): int
+    {
+        $dayStart = 0;
+
+        foreach ($schedule?->windows ?? [] as $window) {
+            $start = $this->clockMinutes($window['start']);
+            $end = $this->clockMinutes($window['end']);
+            if ($end < $start) {
+                $dayStart = max($dayStart, $end);
+            }
+        }
+
+        return $dayStart;
     }
 
     /**
-     * Infinity (null/empty date) is always eligible; dated orders only on their calendar day in schedule TZ.
+     * Infinity (null/empty date) is always eligible; dated orders only on their business day in schedule TZ.
      */
     public function isActiveOnDate(?string $orderDateYmd, ?AvailabilitySchedule $schedule, ?int $timestamp = null): bool
     {
@@ -83,7 +98,7 @@ final readonly class OrderAvailabilityNormalizer
 
         $tz = new DateTimeZone($schedule->timezone);
 
-        return $tz->getOffset($this->clock->now()->setTimezone($tz));
+        return $tz->getOffset($this->clock->now()->setTimezone($tz)) - $this->dayStartMinutes($schedule) * 60;
     }
 
     /**
@@ -124,25 +139,39 @@ final readonly class OrderAvailabilityNormalizer
                     $referenceDate . ' ' . $window['end'] . ':00',
                     $timezone,
                 );
-
-                $startUtc = $startLocal->setTimezone(new DateTimeZone('UTC'));
-                $endUtc = $endLocal->setTimezone(new DateTimeZone('UTC'));
-
-                if ($startUtc->format('Y-m-d') !== $endUtc->format('Y-m-d')) {
-                    throw new \InvalidArgumentException(
-                        'availability window crosses UTC midnight is not supported in v1',
-                    );
+                if ($endLocal <= $startLocal) {
+                    $endLocal = $endLocal->modify('+1 day');
                 }
 
-                $utcDow = (int) $startUtc->format('N');
-                $startMin = $this->minutesFromMidnight($startUtc);
-                $endMin = $this->minutesFromMidnight($endUtc);
-
-                $segments[] = $this->segment($utcDow, $startMin, $endMin);
+                array_push($segments, ...$this->utcSegments($startLocal, $endLocal));
             }
         }
 
         return implode(',', $segments);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private function utcSegments(DateTimeImmutable $start, DateTimeImmutable $end): array
+    {
+        $utc = new DateTimeZone('UTC');
+        $from = $start->setTimezone($utc);
+        $to = $end->setTimezone($utc);
+        $segments = [];
+
+        while ($from < $to) {
+            $midnight = $from->setTime(0, 0)->modify('+1 day');
+            $until = $to < $midnight ? $to : $midnight;
+            $segments[] = $this->segment(
+                (int) $from->format('N'),
+                $this->minutesFromMidnight($from),
+                $until == $midnight ? 1440 : $this->minutesFromMidnight($until),
+            );
+            $from = $until;
+        }
+
+        return $segments;
     }
 
     /**
@@ -196,6 +225,13 @@ final readonly class OrderAvailabilityNormalizer
         return $nowLocal
             ->modify(($delta >= 0 ? '+' : '') . $delta . ' days')
             ->format('Y-m-d');
+    }
+
+    private function clockMinutes(string $time): int
+    {
+        [$hours, $minutes] = array_map('intval', explode(':', $time) + [1 => '0']);
+
+        return $hours * 60 + $minutes;
     }
 
     private function minutesFromMidnight(DateTimeImmutable $dt): int
