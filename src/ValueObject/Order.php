@@ -42,6 +42,8 @@ final readonly class Order
         /** Lifetime received_count; seeds sold when !hasDailyLimit. */
         public ?int $receivedCount = null,
         public PaymentModel $paymentModel = PaymentModel::CPL,
+        public bool $fillFirst = false,
+        public ?int $manualShare = null,
     ) {}
 
     public static function irevOrderId(int $presetId, string $nodeUuid): string

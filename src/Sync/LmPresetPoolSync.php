@@ -53,6 +53,8 @@ final readonly class LmPresetPoolSync
                 o.daily_received_local_day,
                 o.payment_model,
                 o.date,
+                o.fill_first,
+                o.manual_share,
                 o.availability_schedule AS order_schedule,
                 u.availability_schedule AS user_schedule,
                 COALESCE(o.price, p.price) AS price
@@ -312,6 +314,8 @@ final readonly class LmPresetPoolSync
             hasDailyLimit: $hasDailyLimit,
             receivedCount: (int) $row['received_count'],
             paymentModel: PaymentModel::normalize((string) ($row['payment_model'] ?? PaymentModel::CPL->value)),
+            fillFirst: filter_var($row['fill_first'] ?? false, FILTER_VALIDATE_BOOLEAN),
+            manualShare: $row['manual_share'] !== null ? (int) $row['manual_share'] : null,
         );
     }
 }

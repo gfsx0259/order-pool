@@ -43,6 +43,8 @@ final readonly class OrderSync
             'daily_tz_offset' => (string) $order->dailyTzOffset,
             'date' => $order->date ?? '',
             'payment_model' => $order->paymentModel->value,
+            'fill_first' => $order->fillFirst ? '1' : '0',
+            'manual_share' => $order->manualShare !== null ? (string) $order->manualShare : '',
         ];
 
         $this->redis->multi(\Redis::PIPELINE);
