@@ -171,7 +171,9 @@ local function try_candidate(orderId)
         'daily_tz_offset',
         'date',
         'has_daily_limit',
-        'payment_model'
+        'payment_model',
+        'fill_first',
+        'manual_share'
     )
 
     local kind = d[1]
@@ -183,6 +185,8 @@ local function try_candidate(orderId)
     local order_date = d[7]
     local has_daily_limit = d[8]
     local payment_model = d[9]
+    local fill_first = d[10]
+    local manual_share = tonumber(d[11] or '')
 
     if kind == false or rate == false or partner_id == false or not is_available(availability_utc) then
         return nil
@@ -231,6 +235,8 @@ local function try_candidate(orderId)
         sold = sold,
         cap = cap,
         weight = weight,
+        fill_first = fill_first == '1',
+        manual_share = (manual_share ~= nil and manual_share > 0) and manual_share or nil,
     }
 end
 
@@ -262,13 +268,48 @@ if #candidates == 0 or sumWeight <= 0 then
     return nil
 end
 
+local competing = {}
+for i = 1, #candidates do
+    if candidates[i].fill_first then
+        table.insert(competing, candidates[i])
+    end
+end
+if #competing == 0 then
+    competing = candidates
+end
+
+local manualShare = 0.0
+local autoWeight = 0.0
+local competingSold = 0
+for i = 1, #competing do
+    local candidate = competing[i]
+    competingSold = competingSold + candidate.sold
+    if candidate.manual_share ~= nil then
+        manualShare = manualShare + candidate.manual_share
+    else
+        autoWeight = autoWeight + candidate.weight
+    end
+end
+
+local autoShare = math.max(100 - manualShare, 0)
+local sumShare = 0.0
+for i = 1, #competing do
+    local candidate = competing[i]
+    if candidate.manual_share ~= nil then
+        candidate.share = candidate.manual_share
+    else
+        candidate.share = autoShare * candidate.weight / autoWeight
+    end
+    sumShare = sumShare + candidate.share
+end
+
 local best
 local bestDeficit = -1e18
-local N = totalSold + 1
+local N = competingSold + 1
 
-for i = 1, #candidates do
-    local candidate = candidates[i]
-    local fair = N * (candidate.weight / sumWeight)
+for i = 1, #competing do
+    local candidate = competing[i]
+    local fair = N * (candidate.share / sumShare)
     local deficit = fair - candidate.sold
     if deficit > bestDeficit then
         bestDeficit = deficit
