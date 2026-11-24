@@ -57,14 +57,15 @@ final readonly class LmPresetPoolSync
                 o.manual_share,
                 o.availability_schedule AS order_schedule,
                 u.availability_schedule AS user_schedule,
-                COALESCE(o.price, p.price) AS price
+                COALESCE(o.price, p.price) AS price,
+                COALESCE((SELECT jsonb_agg(x.preset_id) FROM order_extra_presets x WHERE x.order_id = o.id), \'[]\') AS extra_preset_ids
              FROM orders o
              INNER JOIN users u ON u.id = o.partner_id
              INNER JOIN presets p ON p.id = o.preset_id
-             WHERE o.preset_id = ?
+             WHERE (o.preset_id = ? OR EXISTS (SELECT 1 FROM order_extra_presets x WHERE x.order_id = o.id AND x.preset_id = ?))
                AND o.status = \'in_progress\'
                AND o.received_count < o.limit_total',
-            [$presetId],
+            [$presetId, $presetId],
         )->fetchAll();
 
         $synced = 0;
@@ -316,6 +317,7 @@ final readonly class LmPresetPoolSync
             paymentModel: PaymentModel::normalize((string) ($row['payment_model'] ?? PaymentModel::CPL->value)),
             fillFirst: filter_var($row['fill_first'] ?? false, FILTER_VALIDATE_BOOLEAN),
             manualShare: $row['manual_share'] !== null ? (int) $row['manual_share'] : null,
+            extraPresetIds: array_map('intval', json_decode((string) ($row['extra_preset_ids'] ?? '[]'), true) ?: []),
         );
     }
 }

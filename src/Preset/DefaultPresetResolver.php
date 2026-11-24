@@ -8,7 +8,7 @@ use Cycle\Database\DatabaseProviderInterface;
 use Psr\Log\LoggerInterface;
 
 /**
- * Resolves routing preset: explicit lead preset_id or the country_default preset.
+ * Resolves routing preset: explicit lead preset_id or the country_default preset of the vertical, the default vertical when none is given.
  */
 final readonly class DefaultPresetResolver
 {
@@ -17,16 +17,16 @@ final readonly class DefaultPresetResolver
         private LoggerInterface $logger,
     ) {}
 
-    public function resolve(?int $presetId, ?string $countryCode): ?ResolvedPreset
+    public function resolve(?int $presetId, ?string $countryCode, ?int $verticalId = null): ?ResolvedPreset
     {
         if ($presetId !== null) {
             return $this->resolveById($presetId);
         }
 
-        return $this->resolveByCountry($countryCode);
+        return $this->resolveByCountry($countryCode, $verticalId);
     }
 
-    private function resolveByCountry(?string $countryCode): ?ResolvedPreset
+    private function resolveByCountry(?string $countryCode, ?int $verticalId): ?ResolvedPreset
     {
         $countryCode = strtoupper(trim((string) $countryCode));
         if ($countryCode === '') {
@@ -37,12 +37,13 @@ final readonly class DefaultPresetResolver
             'SELECT id, prefer_cpl
              FROM presets
              WHERE country_code = ? AND country_default = true
+               AND vertical_id = COALESCE(CAST(? AS INTEGER), (SELECT id FROM verticals WHERE is_default))
              LIMIT 1',
-            [$countryCode],
+            [$countryCode, $verticalId],
         )->fetch();
 
         if (!$row) {
-            $this->logger->warning('No default preset for country', ['country' => $countryCode]);
+            $this->logger->warning('No default preset for country', ['country' => $countryCode, 'vertical_id' => $verticalId]);
 
             return null;
         }

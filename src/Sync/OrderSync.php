@@ -14,7 +14,7 @@ use Enthusiast\WorkerTemplate\RedisClientInterface;
  * Writes orders into Redis (LM + IREV share one HASH schema).
  *
  * - order:{id}:data HASH
- * - preset:{id}:orders_pool:{cpl|cpa} SET
+ * - preset:{id}:orders_pool:{cpl|cpa} SET, one per folder of the order
  * - order:{id}:sold:{day} STRING
  */
 final readonly class OrderSync
@@ -30,7 +30,6 @@ final readonly class OrderSync
     public function upsert(Order $order): void
     {
         $dataKey = $this->keys->orderDataKey($order->orderId);
-        $poolKey = $this->keys->presetOrderPoolKey($order->presetId, $order->paymentModel);
 
         $fields = [
             'source' => $order->isIrev() ? 'irev' : 'lm',
@@ -49,7 +48,9 @@ final readonly class OrderSync
 
         $this->redis->multi(\Redis::PIPELINE);
         $this->redis->hMSet($dataKey, $fields);
-        $this->redis->rawCommand('SADD', $poolKey, $order->orderId);
+        foreach ($order->presetIds() as $presetId) {
+            $this->redis->rawCommand('SADD', $this->keys->presetOrderPoolKey($presetId, $order->paymentModel), $order->orderId);
+        }
         $this->redis->exec();
     }
 

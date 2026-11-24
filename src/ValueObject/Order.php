@@ -18,7 +18,8 @@ use Enthusiast\OrderPool\Enum\PaymentModel;
  * - LM without daily_limit (dated / infinity) → limit_total (hasDailyLimit=false)
  * - IREV → snapshot cap, today's sold seeded from the snapshot (receivedCount)
  *
- * Pool membership: preset:{presetId}:orders_pool:{cpl|cpa}
+ * Pool membership: preset:{presetId}:orders_pool:{cpl|cpa} for presetId and every extraPresetIds
+ * (a multi-GEO order takes leads of several country folders under one cap).
  */
 final readonly class Order
 {
@@ -44,7 +45,17 @@ final readonly class Order
         public PaymentModel $paymentModel = PaymentModel::CPL,
         public bool $fillFirst = false,
         public ?int $manualShare = null,
+        /** @var list<int> */
+        public array $extraPresetIds = [],
     ) {}
+
+    /**
+     * @return list<int>
+     */
+    public function presetIds(): array
+    {
+        return array_values(array_unique([$this->presetId, ...$this->extraPresetIds]));
+    }
 
     public static function irevOrderId(int $presetId, string $nodeUuid): string
     {
